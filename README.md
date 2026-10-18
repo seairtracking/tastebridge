@@ -23,6 +23,12 @@ Two ways to use it:
 - **Optional accounts:** keep your favorite, city and usual food and mood in a profile, add friends by
   username (they must accept), and plan with a friend in one tap: their profile fills their side, and
   the plan shows up on their phone too. Everything still works without an account.
+- **Places you've been:** tap **Been here ✓** on a place, or answer **How was it?** the next time you open
+  the app after a plan. Your history (with date, who you went with, ❤️ or 👎) shapes the next plan: places
+  you have been are marked and move down so somewhere new comes first, and places you rated 👎 are never
+  suggested again. Signed-in plans are saved (the latest 30) and can be reopened.
+- **Account recovery without email:** sign-up shows a one-time recovery code; **Forgot password?** uses it
+  to set a new password, and **Change password** is in your profile. Both sign out your other devices.
 
 It runs in the browser and **installs like an app** on iPhone (Share → Add to Home Screen) and Android
 (Install app).
@@ -108,6 +114,7 @@ Accounts and two-phone rooms are stored in SQLite (`node:sqlite`) in a folder ou
 - A friend's favorite is visible only after they accept the friend request. In a room, each person's
   favorite stays hidden from the other until the plan is made, and the host's location never leaves the
   server.
+- Recovery codes are shown once, stored only as scrypt hashes, work once, and are rate limited.
 - Rooms expire after 48 hours. Deleting an account (password required) removes the profile, friendships,
   sessions and the rooms it hosted.
 - Sign-up, sign-in, friend requests and invites are rate limited per connection; request bodies are
