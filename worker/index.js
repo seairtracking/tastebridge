@@ -1,6 +1,6 @@
 // TasteBridge HTTP entry point (Cloudflare Worker style; local-server.mjs runs it on Node).
 // Routes: the web app, a JSON/NDJSON planning API and an MCP endpoint for AI agents.
-import { ORIGIN, tidy, entity } from './qloo.js';
+import { ORIGIN, tidy, entity, suggest } from './qloo.js';
 import { plan, bridge, balancedFilms, shares, parseInput, OCCASIONS } from './engine.js';
 import { evening, parseEvening } from './evening.js';
 import { handleMcp } from './mcp.js';
@@ -121,6 +121,14 @@ export default {
     if (url.pathname === '/' || /^\/r\/[a-z0-9]{6,16}$/.test(url.pathname)) return new Response(page, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=60' } });
     if (url.pathname === '/health') return json({ ok: true });
     if (url.pathname === '/api/status') return json({ live: Boolean(env.QLOO_API_KEY), occasions: Object.keys(OCCASIONS), mcp: url.origin + '/mcp' });
+    if (url.pathname === '/api/suggest') {
+      const q = tidy(url.searchParams.get('q'), 60);
+      if (q.length < 2 || !env.QLOO_API_KEY) return json({ items: [] });
+      if (!allow(request, 120, 'suggest')) return json({ items: [] }, 429);
+      const k = 'suggest|' + q.toLowerCase(), hit = cache.get(k);
+      if (hit && hit.expires > Date.now()) return json({ items: hit.value });
+      try { const items = await suggest(q, env.QLOO_API_KEY, qlooOrigin(env)); remember(k, items); return json({ items }); } catch { return json({ items: [] }); }
+    }
     if (url.pathname === '/api/plan') return planRoute('plan', request, env);
     if (url.pathname === '/api/evening') return planRoute('evening', request, env);
     if (url.pathname.startsWith('/api/account') || url.pathname.startsWith('/api/rooms') || url.pathname.startsWith('/api/photos/')) {

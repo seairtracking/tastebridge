@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS members (
   slot INTEGER NOT NULL CHECK (slot IN (0, 1)),
   name TEXT NOT NULL,
   favorite TEXT NOT NULL,
+  pick TEXT,
   user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   token_hash TEXT NOT NULL,
   joined INTEGER NOT NULL,
@@ -151,6 +152,7 @@ export function openStore(path, now = () => Date.now(), { photosDir = path === '
   const dropPhoto = (name) => { if (!name || !PHOTO_NAME.test(name)) return; if (photosDir) rmSync(join(photosDir, name), { force: true }); else memPhotos.delete(name); };
   db.exec(SCHEMA);
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'recovery')) db.exec('ALTER TABLE users ADD COLUMN recovery TEXT');
+  if (!db.prepare('PRAGMA table_info(members)').all().some((c) => c.name === 'pick')) db.exec('ALTER TABLE members ADD COLUMN pick TEXT');
   const visitCols = db.prepare('PRAGMA table_info(visits)').all().map((c) => c.name);
   for (const [col, type] of [['minutes', 'INTEGER'], ['lat', 'REAL'], ['lon', 'REAL'], ['note', "TEXT NOT NULL DEFAULT ''"], ['photo', 'TEXT'], ['shared', 'INTEGER NOT NULL DEFAULT 0']]) {
     if (!visitCols.includes(col)) db.exec(`ALTER TABLE visits ADD COLUMN ${col} ${type}`);
@@ -354,22 +356,22 @@ export function openStore(path, now = () => Date.now(), { photosDir = path === '
     },
 
     // ---- rooms: two phones, one plan ----
-    createRoom({ settings, name, favorite, userId = null }) {
+    createRoom({ settings, name, favorite, pick = null, userId = null }) {
       const id = roomId(), t = token();
       db.exec('BEGIN');
       try {
         run('INSERT INTO rooms (id, created, expires, settings) VALUES (?, ?, ?, ?)', id, now(), now() + ROOM_HOURS * 3600000, JSON.stringify(settings));
-        run('INSERT INTO members (room_id, slot, name, favorite, user_id, token_hash, joined) VALUES (?, 0, ?, ?, ?, ?, ?)', id, name, favorite, userId, hash(t), now());
+        run('INSERT INTO members (room_id, slot, name, favorite, pick, user_id, token_hash, joined) VALUES (?, 0, ?, ?, ?, ?, ?, ?)', id, name, favorite, pick, userId, hash(t), now());
         db.exec('COMMIT');
       } catch (e) { db.exec('ROLLBACK'); throw e; }
       return { id, token: t };
     },
-    joinRoom(id, { name, favorite, userId = null }) {
+    joinRoom(id, { name, favorite, pick = null, userId = null }) {
       const room = one('SELECT * FROM rooms WHERE id = ? AND expires > ?', id, now());
       if (!room) throw new Error('This invite has expired or does not exist.');
       if (one('SELECT 1 FROM members WHERE room_id = ? AND slot = 1', id)) throw new Error('Someone has already joined this plan.');
       const t = token();
-      run('INSERT INTO members (room_id, slot, name, favorite, user_id, token_hash, joined) VALUES (?, 1, ?, ?, ?, ?, ?)', id, name, favorite, userId, hash(t), now());
+      run('INSERT INTO members (room_id, slot, name, favorite, pick, user_id, token_hash, joined) VALUES (?, 1, ?, ?, ?, ?, ?, ?)', id, name, favorite, pick, userId, hash(t), now());
       run('DELETE FROM invites WHERE room_id = ?', id);
       return { token: t };
     },
@@ -385,7 +387,7 @@ export function openStore(path, now = () => Date.now(), { photosDir = path === '
       return {
         id: r.id, created: r.created, expires: r.expires, settings: JSON.parse(r.settings),
         plan: r.plan ? JSON.parse(r.plan) : null, planned: r.planned,
-        members: all('SELECT slot, name, favorite, user_id AS userId, joined FROM members WHERE room_id = ? ORDER BY slot', id),
+        members: all('SELECT slot, name, favorite, pick, user_id AS userId, joined FROM members WHERE room_id = ? ORDER BY slot', id),
         votes: all('SELECT slot, option, value FROM votes WHERE room_id = ?', id),
       };
     },

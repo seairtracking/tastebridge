@@ -524,3 +524,29 @@ test("memories: photos lose hidden GPS, friends see only shared check-ins, stran
   assert.equal((await cat(up.data.photo)).status, 404);
   assert.equal((await cat("/api/account/memories")).data.friends.length, 0);
 });
+
+test("a reading picked from the suggestions is used instead of the default one", async () => {
+  const realFetch = globalThis.fetch;
+  const reply = (body) => new Response(JSON.stringify(body));
+  globalThis.fetch = async (url) => {
+    const u = new URL(String(url)), q = (k) => u.searchParams.get(k);
+    if (u.pathname === "/search") {
+      if (q("query") === "Harry Potter") return reply({ results: [item(2, "Harry Potter", { types: ["urn:entity:movie"] }), item(3, "Harry Potter", { types: ["urn:entity:book"] }), item(9, "Harry Potter Shop", { types: ["urn:entity:place"] })] });
+      return reply({ results: [item(1, q("query"), { types: ["urn:entity:artist"] })] });
+    }
+    const [x, y] = q("signal.interests.entities").split(",");
+    const ent = (n, name) => item(n, name, { properties: { address: "Hanoi" }, query: { explainability: { "signal.interests.entities": [{ entity_id: x, score: 0.5 }, { entity_id: y || x, score: 0.5 }] } } });
+    return reply({ results: { entities: q("filter.type") === "urn:entity:movie" ? [ent(60, "Film")] : [ent(70, "Cafe A"), ent(71, "Cafe B"), ent(72, "Cafe C")] } });
+  };
+  try {
+    const auto = await plan({ first: "Radiohead", second: "Harry Potter", city: "Hanoi" }, "k");
+    assert.equal(auto.seeds[1].kind, "film");
+    const picked = await plan({ first: "Radiohead", second: "Harry Potter", picks: [null, id(3)], city: "Hanoi" }, "k");
+    assert.equal(picked.seeds[1].id, id(3));
+    assert.equal(picked.seeds[1].kind, "book");
+    const bogus = await plan({ first: "Radiohead", second: "Harry Potter", picks: [null, "not-an-id"], city: "Hanoi" }, "k");
+    assert.equal(bogus.seeds[1].kind, "film");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

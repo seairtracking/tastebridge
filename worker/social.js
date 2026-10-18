@@ -44,6 +44,7 @@ const cleanSettings = (s = {}) => {
   };
 };
 
+const pickOf = (x) => (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(x || '')) ? String(x).toLowerCase() : null);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const webUrl = (u) => { try { const x = new URL(String(u)); return x.protocol === 'https:' || x.protocol === 'http:' ? x.href.slice(0, 500) : null; } catch { return null; } };
 function cleanPlace(p) {
@@ -232,7 +233,7 @@ export async function handleSocial(request, env, { allow, runPlan }) {
         friend = store.userByName(tidy(body.invite, 20));
         if (!friend || !store.areFriends(me.id, friend.id)) return fail('You can only invite people who accepted your friend request.', 403);
       }
-      const room = store.createRoom({ settings, name, favorite, userId: me?.id ?? null });
+      const room = store.createRoom({ settings, name, favorite, pick: pickOf(body.pick), userId: me?.id ?? null });
       if (friend && friend.favorite) {
         // Friends agreed to share their favorite when they accepted, so their seat fills in from their profile;
         // they still see the plan on their own phone and can vote.
@@ -267,7 +268,7 @@ export async function handleSocial(request, env, { allow, runPlan }) {
       const name = tidy(body.name, 40) || me?.display || 'Friend';
       const favorite = tidy(body.favorite, 70) || me?.favorite || '';
       if (favorite.length < 2) return fail('Enter your favorite first.');
-      try { return json(store.joinRoom(room.id, { name, favorite, userId: me?.id ?? null })); } catch (e) { return fail(e.message, 409); }
+      try { return json(store.joinRoom(room.id, { name, favorite, pick: pickOf(body.pick), userId: me?.id ?? null })); } catch (e) { return fail(e.message, 409); }
     }
     if (seat == null) return fail('Only the two people in this plan can do that.', 403);
     if (action === 'vote' && request.method === 'POST') {
@@ -281,7 +282,7 @@ export async function handleSocial(request, env, { allow, runPlan }) {
       const s = room.settings;
       const input = {
         seen: store.seenBy(room.members.map((m) => m.userId)),
-        favorites: room.members.map((m) => m.favorite), names: room.members.map((m) => m.name),
+        favorites: room.members.map((m) => m.favorite), names: room.members.map((m) => m.name), picks: room.members.map((m) => m.pick),
         city: s.city, lat: s.lat, lon: s.lon, start: s.start, day: s.day, cuisine: s.cuisine, mood: s.mood, budget: s.budget, occasion: s.occasion, special: s.special,
       };
       return runPlan(s.mode, input, request, (result) => {

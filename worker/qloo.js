@@ -99,7 +99,7 @@ const typeRank = (x) => {
 
 // Ranked readings of a favorite: exact-name matches (by type), then titles that start with it.
 // The agent falls back to the next reading when Qloo has little taste data for the first.
-export async function candidates(name, key, origin) {
+export async function candidates(name, key, origin, limit = 4) {
   const q = name.toLowerCase();
   const matches = await searchEntities(name, key, origin, 10);
   // Venues are not tastes: "Christopher Noland Salon" must never stand in for Christopher Nolan.
@@ -109,7 +109,19 @@ export async function candidates(name, key, origin) {
   const list = [...exact, ...near];
   if (!list.length && matches[0]) list.push(matches[0]);
   if (!list.length) throw new Error('Qloo could not find “' + name + '”. Try a well-known artist, movie, book or show.');
-  return list.slice(0, 4);
+  // the picked reading may sit further down the list, so the caller can ask for more
+  if (limit > 4) for (const x of matches) if (!list.includes(x) && !x.types.includes('urn:entity:place')) list.push(x);
+  return list.slice(0, limit);
+}
+
+// Suggestions while typing a favorite: taste entities only (no venues), best readings first.
+export async function suggest(text, key, origin) {
+  // Accent-insensitive, so "son tung" finds "Sơn Tùng M-TP"; only real taste kinds (no places, regions or unknown types).
+  const fold = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/gi, 'd').toLowerCase();
+  const q = fold(text);
+  const matches = (await searchEntities(text, key, origin, 10)).filter((x) => !['favorite', 'place', 'destination'].includes(kind(x)));
+  const rank = (x) => (fold(x.name) === q ? 0 : fold(x.name).startsWith(q) ? 1 : 2) * 100 + typeRank(x);
+  return matches.sort((a, b) => rank(a) - rank(b)).slice(0, 6).map((x) => ({ id: x.id, name: x.name, kind: kind(x) }));
 }
 
 export async function resolveFavorite(name, key, origin) {

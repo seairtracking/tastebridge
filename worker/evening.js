@@ -3,7 +3,7 @@
 // Every stop is ranked for fairness with Qloo explainability, and the agent relaxes its own filters
 // when there is too little to choose from.
 import { ORIGIN, tidy, insights, kind } from './qloo.js';
-import { understandAll, pickFilms, bridgeN, cityKey, inCity, occasionFit, readFavorites, seedSummary, soft, who } from './engine.js';
+import { M, understandAll, pickFilms, bridgeN, cityKey, inCity, occasionFit, readFavorites, seedSummary, soft, who } from './engine.js';
 
 export const CUISINES = ['vietnamese', 'japanese', 'korean', 'chinese', 'thai', 'indian', 'italian', 'french', 'mexican', 'american', 'mediterranean', 'vegetarian'];
 export const MOODS = ['romantic', 'cozy', 'lively', 'quiet', 'chill'];
@@ -112,7 +112,7 @@ export function familyFriendly(category) {
 }
 
 export function parseEvening(input) {
-  const { favorites, names } = readFavorites(input);
+  const { favorites, names, picks } = readFavorites(input);
   const city = tidy(input?.city, 70);
   const lat = Number(input?.lat), lon = Number(input?.lon);
   const near = Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && !(lat === 0 && lon === 0)
@@ -120,7 +120,7 @@ export function parseEvening(input) {
   if (!near && city.length < 2) throw new Error('Enter a city or use your location.');
   const start = minutesOf(input?.start) ?? 18 * 60 + 30;
   return {
-    favorites, names, city, near,
+    favorites, names, picks, city, near,
     start: clock(Math.min(start, 23 * 60)),
     day: DAYS.includes(input?.day) ? input.day : null,
     cuisine: CUISINES.includes(input?.cuisine) ? input.cuisine : null,
@@ -145,10 +145,12 @@ async function round(ids, params, opts, key, origin, seen) {
 }
 
 // Runs search attempts until enough suitable places exist, keeping the best attempt and logging refinements.
+const stageKey = (stage) => (stage === 'dinner' ? 'dinner' : stage === 'show' ? 'show' : 'after');
 async function search(stage, attempts, { ids, key, origin, step, accept, seen }) {
   let best = [], bestCount = -1;
   for (const [n, attempt] of attempts.entries()) {
-    if (n > 0) step('refine', `Refining the ${stage}`, `Only ${Math.max(bestCount, 0)} good ${attempt.plural} so far, so the agent ${attempt.why}.`);
+    if (n > 0) step('refine', `Refining the ${stage}`, `Only ${Math.max(bestCount, 0)} good ${attempt.plural} so far, so the agent ${attempt.why}.`,
+      ids.length === 2 && { l: M('s.refineStage.l', { stage: stageKey(stage) }), d: [M('s.refineStage.d', { count: Math.max(bestCount, 0), why: attempt.whyRef })] });
     const pool = await round(ids, attempt.params, attempt.opts, key, origin, seen);
     const good = pool.filter(accept);
     // Places that are mainly the right kind lead; the rest keep their fairness order behind them.
@@ -163,14 +165,14 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
   const q = parseEvening(input);
   const seen = input?.seen && typeof input.seen === 'object' ? input.seen : {};
   const steps = [];
-  const step = (id, label, detail) => { const s = { id, label, detail }; steps.push(s); onStep(s); };
+  const step = (id, label, detail, t) => { const s = { id, label, detail, ...(t ? { t } : {}) }; steps.push(s); onStep(s); };
   const sp = q.special ? SPECIALS[q.special] : null;
   if (sp && !q.mood) q.mood = sp.mood;
   const area = q.near ? 'near you' : q.city;
   const ck = q.near ? '' : cityKey(q.city);
   const startMin = minutesOf(q.start);
 
-  const { seeds, filmList, warning } = await understandAll(q.favorites, key, origin, step);
+  const { seeds, filmList, warning, warningKey } = await understandAll(q.favorites, key, origin, step, q.picks);
   const ids = seeds.map((s) => s.id), n = ids.length;
 
   // 1. Dinner: cuisine and mood first; the agent relaxes the mood, then the cuisine, if too little fits.
@@ -191,12 +193,13 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
   const dinnerOpts = { city: ck ? q.city : '', fits: DINNER_FITS, boost: dinnerBoost, extra: dinnerExtra };
   const tags = (...t) => { const list = t.filter(Boolean); return list.length > 1 ? { 'filter.tags': list.join(','), 'operator.filter.tags': 'intersection' } : { 'filter.tags': list[0] }; };
   const label = [q.cuisine && q.cuisine[0].toUpperCase() + q.cuisine.slice(1), 'restaurants'].filter(Boolean).join(' ');
-  step('dinner', `Finding ${sp ? sp.label.toLowerCase() + ' ' : ''}dinner ${q.near ? 'near you' : 'in ' + q.city}`, `Asking Qloo for ${label.toLowerCase()}${q.mood ? ` with a ${q.mood} feel` : ''}${sp ? `, preferring places Qloo marks as good for ${sp.label.toLowerCase()}s` : ''} that fit ${n === 1 ? 'your taste' : `each of you and ${who(n)} together`}.`);
+  step('dinner', `Finding ${sp ? sp.label.toLowerCase() + ' ' : ''}dinner ${q.near ? 'near you' : 'in ' + q.city}`, `Asking Qloo for ${label.toLowerCase()}${q.mood ? ` with a ${q.mood} feel` : ''}${sp ? `, preferring places Qloo marks as good for ${sp.label.toLowerCase()}s` : ''} that fit ${n === 1 ? 'your taste' : `each of you and ${who(n)} together`}.`,
+    n === 2 && { l: M(sp ? 's.dinner.lSp' : 's.dinner.l', { special: q.special, where: q.near ? M('where.near') : M('where.in', { city: q.city }) }), d: [M('s.dinner.d', { what: q.cuisine ? M('what.cuisine', { cuisine: q.cuisine }) : M('what.any') }), ...(q.mood ? [M('s.dinner.mood', { mood: q.mood })] : []), ...(sp ? [M('s.dinner.special', { special: q.special })] : [])] });
   const base = { 'filter.type': 'urn:entity:place', take: 25 };
   const dinnerAttempts = [
     { params: { ...base, ...where(q.near, q.city, r0), ...tags(restaurant, cuisineTag, moodTag), ...(sp?.quality ? { 'bias.quality': sp.quality } : {}) }, opts: dinnerOpts, enough: 3 },
-    moodTag && { params: { ...base, ...where(q.near, q.city, r0), ...tags(restaurant, cuisineTag) }, opts: dinnerOpts, enough: 3, plural: 'restaurants', why: `let the ${q.mood} mood guide the ranking instead of filtering on it` },
-    { params: { ...base, ...where(q.near, q.city, r0 * 2.5), ...tags(restaurant) }, opts: dinnerOpts, enough: 2, plural: 'restaurants', why: `widened the search to ${(r0 * 2.5) / 1000} km${q.cuisine ? ` and opened it to cuisines close to ${q.cuisine}` : ''}` },
+    moodTag && { params: { ...base, ...where(q.near, q.city, r0), ...tags(restaurant, cuisineTag) }, opts: dinnerOpts, enough: 3, plural: 'restaurants', why: `let the ${q.mood} mood guide the ranking instead of filtering on it`, whyRef: M('why.moodRank', { mood: q.mood }) },
+    { params: { ...base, ...where(q.near, q.city, r0 * 2.5), ...tags(restaurant) }, opts: dinnerOpts, enough: 2, plural: 'restaurants', why: `widened the search to ${(r0 * 2.5) / 1000} km${q.cuisine ? ` and opened it to cuisines close to ${q.cuisine}` : ''}`, whyRef: q.cuisine ? M('why.widenCuisine', { km: (r0 * 2.5) / 1000, cuisine: q.cuisine }) : M('why.widen', { km: (r0 * 2.5) / 1000 }) },
   ].filter(Boolean);
   const dinner = await search('dinner', dinnerAttempts, {
     ids, key, origin, step, seen,
@@ -215,10 +218,10 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
   const nice = later.length > 0 && !wet && !extreme && later.every((w) => w.rain < 20 && w.temp >= 18 && w.temp <= 30);
   if (later.length) {
     const w = later[0];
-    step('weather', 'Checking the weather', `${w.icon} ${w.temp}°C with a ${w.rain}% chance of rain around ${w.time} near ${pick.name} (Open-Meteo).`);
-    if (wet) step('refine', 'Rain is likely', 'Rain is likely later, so the agent keeps the next stops within a short walk and prefers indoor places over rooftops and terraces.');
-    else if (extreme) step('refine', `It will be ${later[0].temp >= 33 ? 'hot' : 'cold'}`, 'The agent keeps the walks short and prefers indoor places.');
-    else if (nice) step('refine', 'A nice evening', 'Dry and mild, so rooftops, terraces and gardens get a boost.');
+    step('weather', 'Checking the weather', `${w.icon} ${w.temp}°C with a ${w.rain}% chance of rain around ${w.time} near ${pick.name} (Open-Meteo).`, { l: M('s.weather.l'), d: [M('s.weather.d', { icon: w.icon, temp: w.temp, rain: w.rain, time: w.time, place: pick.name })] });
+    if (wet) step('refine', 'Rain is likely', 'Rain is likely later, so the agent keeps the next stops within a short walk and prefers indoor places over rooftops and terraces.', { l: M('s.wet.l'), d: [M('s.wet.d')] });
+    else if (extreme) step('refine', `It will be ${later[0].temp >= 33 ? 'hot' : 'cold'}`, 'The agent keeps the walks short and prefers indoor places.', { l: M(later[0].temp >= 33 ? 's.hot.l' : 's.cold.l'), d: [M('s.extreme.d')] });
+    else if (nice) step('refine', 'A nice evening', 'Dry and mild, so rooftops, terraces and gardens get a boost.', { l: M('s.nice.l'), d: [M('s.nice.d')] });
   }
   const walkScale = wet || extreme ? 300 : 500;
   const skyFactor = (x) => (!x.outdoor ? 1 : wet ? 0.45 : extreme ? 0.7 : nice ? 1.25 : 1);
@@ -234,16 +237,16 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
   };
   const nearExtra = (time) => (x) => ({ open: openAt(x.hours, q.day, time), walk: walk(metres(anchor, x)), liveMusic: !!x.liveMusic, outdoor: !!x.outdoor, lat: x.lat, lon: x.lon });
   const taken = new Set([pick.id]);
-  step('after', 'Finding a second stop nearby', `Looking for ${q.mood === 'cozy' || q.mood === 'quiet' ? 'dessert, cafés or quiet bars' : 'bars'} within a short walk of ${pick.name}.`);
+  step('after', 'Finding a second stop nearby', `Looking for ${q.mood === 'cozy' || q.mood === 'quiet' ? 'dessert, cafés or quiet bars' : 'bars'} within a short walk of ${pick.name}.`, { l: M('s.after.l'), d: [M(q.mood === 'cozy' || q.mood === 'quiet' ? 's.after.dQuiet' : 's.after.d', { place: pick.name })] });
   const after = anchor ? await search('second stop', [
     { params: { ...base, ...where(anchor, q.city, 1200), 'filter.tags': afterTag }, opts: { fits: AFTER_FITS, boost: nearBoost(afterTime, q.mood), extra: nearExtra(afterTime) }, enough: 2 },
-    { params: { ...base, ...where(anchor, q.city, 3000), 'filter.tags': afterTag }, opts: { fits: AFTER_FITS, boost: nearBoost(afterTime, q.mood), extra: nearExtra(afterTime) }, enough: 1, plural: 'places', why: 'widened the walk to about 3 km' },
+    { params: { ...base, ...where(anchor, q.city, 3000), 'filter.tags': afterTag }, opts: { fits: AFTER_FITS, boost: nearBoost(afterTime, q.mood), extra: nearExtra(afterTime) }, enough: 1, plural: 'places', why: 'widened the walk to about 3 km', whyRef: M('why.walk3') },
   ], { ids, key, origin, step, seen, accept: (p) => !taken.has(p.id) && p.fit >= 0.75 && p.open !== 'closed' && (!sp?.family || familyFriendly(p.category)) }) : [];
   const afterList = after.filter((p) => !taken.has(p.id) && (!sp?.family || familyFriendly(p.category)));
   afterList.slice(0, 3).forEach((p) => taken.add(p.id)); // the show list should offer different places
 
   // 3. Live music or a show nearby. Qloo has no event listings, so venues link to their own programme.
-  step('show', 'Looking for live music or a show', `Searching music venues, jazz and comedy clubs near ${pick.name}. Qloo has no event listings, so each venue links to its own programme.`);
+  step('show', 'Looking for live music or a show', `Searching music venues, jazz and comedy clubs near ${pick.name}. Qloo has no event listings, so each venue links to its own programme.`, { l: M('s.show.l'), d: [M('s.show.d', { place: pick.name })] });
   // Real stages first (live music, jazz, comedy, theatre); dance clubs rank lower on a romantic, cozy or quiet night.
   const calm = ['romantic', 'cozy', 'quiet'].includes(q.mood) || !!sp?.family;
   const showBoost = (x) => {
@@ -256,26 +259,26 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
   };
   const show = anchor ? await search('show', [
     { params: { ...base, ...where(anchor, q.city, 2500), 'filter.tags': SHOW_TAGS }, opts: { fits: SHOW_FITS, boost: showBoost, extra: nearExtra(showTime) }, enough: 2 },
-    { params: { ...base, ...where(anchor, q.city, 6000), 'filter.tags': SHOW_TAGS }, opts: { fits: SHOW_FITS, boost: showBoost, extra: nearExtra(showTime) }, enough: 1, plural: 'venues', why: 'widened the search to about 6 km' },
+    { params: { ...base, ...where(anchor, q.city, 6000), 'filter.tags': SHOW_TAGS }, opts: { fits: SHOW_FITS, boost: showBoost, extra: nearExtra(showTime) }, enough: 1, plural: 'venues', why: 'widened the search to about 6 km', whyRef: M('why.show6') },
   ], { ids, key, origin, step, seen, accept: (p) => !taken.has(p.id) && p.fit >= 0.75 && p.open !== 'closed' && (!sp?.family || familyFriendly(p.category)) }) : [];
   const showList = show.filter((p) => !taken.has(p.id) && (!sp?.family || familyFriendly(p.category)));
 
   // 4. A film for home.
-  const { films, filmNote } = await pickFilms(filmList, seeds, key, origin, step);
+  const { films, filmNote, filmNoteKey } = await pickFilms(filmList, seeds, key, origin, step);
 
   const stops = [
     { slot: 'dinner', time: q.start, title: 'Dinner', options: dinner.slice(0, 3) },
     afterList.length && { slot: 'after', time: afterTime, title: 'Second stop', options: afterList.slice(0, 3) },
     showList.length && { slot: 'show', time: showTime, title: 'Live music or a show', options: showList.slice(0, 3) },
   ].filter(Boolean);
-  step('done', 'Evening ready', `${stops.map((s) => s.title.toLowerCase()).join(', ')} and ${films.length} films for home.`);
+  step('done', 'Evening ready', `${stops.map((s) => s.title.toLowerCase()).join(', ')} and ${films.length} films for home.`, { l: M('s.evening.l'), d: [M('s.evening.d', { films: films.length })] });
 
   return {
     mode: 'evening', source: 'qloo-live', city: area, start: q.start, day: q.day, cuisine: q.cuisine, mood: q.mood, budget: q.budget,
     special: q.special, specialLabel: sp?.label || null, tip: sp?.tip || null,
     weather: weather && weather.some(Boolean) ? weather : null,
     occasionLabel: 'Tonight', people: n, seeds: seedSummary(seeds, q.names),
-    stops, films, filmNote, warning, steps,
+    stops, films, filmNote, filmNoteKey, warning, warningKey, steps, methodKey: 'method.evening',
     method: 'TasteBridge resolves each favorite with Qloo Search and checks their signal, then plans the evening stop by stop with Qloo Insights: dinner filtered by cuisine and mood, a second stop and a live music or show venue searched around the dinner spot. Every stop is ranked with the fairness-weighted rule and Qloo explainability, adjusted for mood, cuisine, budget, walking distance and opening hours where Qloo has them. Qloo does not list events, so check each venue for tonight’s programme.',
   };
 }
