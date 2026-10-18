@@ -39,12 +39,21 @@ export function shares(item, aId, bId) {
 // Accent- and case-insensitive text, so "Hồ Chí Minh" matches "Ho Chi Minh City".
 const fold = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/gi, 'd').toLowerCase();
 // Spaces are dropped too, so "Hanoi" matches "Hà Nội" and "New York" matches "New York, NY".
+// Local spellings that addresses use, so "Lisbon" matches "Lisboa".
+const CITY_ALIASES = {
+  lisbon: 'lisboa', munich: 'munchen', rome: 'roma', prague: 'praha', vienna: 'wien', florence: 'firenze', milan: 'milano',
+  naples: 'napoli', venice: 'venezia', cologne: 'koln', copenhagen: 'kobenhavn', warsaw: 'warszawa', athens: 'athina',
+  seville: 'sevilla', brussels: 'bruxelles', saigon: 'hochiminh', hochiminh: 'saigon', mexico: 'cdmx', thehague: 'denhaag',
+};
 export function cityKey(city) {
-  return fold(city).replace(/\b(city|thanh pho|tp\.?)\b/g, ' ').replace(/[^a-z0-9]/g, '');
+  const key = fold(city).replace(/\b(city|thanh pho|tp\.?)\b/g, ' ').replace(/[^a-z0-9]/g, '');
+  return CITY_ALIASES[key] ? `${key}|${CITY_ALIASES[key]}` : key;
 }
 // Qloo can read "New York" as the whole state; places whose address names the city are preferred.
 export function inCity(address, key) {
-  return !address || !key || fold(address).replace(/[^a-z0-9]/g, '').includes(key);
+  if (!address || !key) return true;
+  const text = fold(address).replace(/[^a-z0-9]/g, '');
+  return key.split('|').some((k) => text.includes(k));
 }
 
 // Fairness-weighted reciprocal-rank ranking over each person's list and the combined list.

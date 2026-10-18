@@ -46,7 +46,8 @@ Live examples:
 | Spirited Away + Daft Punk, dinner in New York | La Grande Boucherie 49/51, Katz's Delicatessen 48/52; films Inception 50/50, Blade Runner 50/50 |
 | Wes Anderson + Arctic Monkeys, drinks in London | The Thin White Duke 50/50, Cavalry & Guards Club 49/51, MAP Maison 47/53; films The Lobster 50/50, Frank 51/49 |
 | Taylor Swift + Radiohead, drinks in Hanoi | MK Rooftop Bar 51/49, Skyline Hanoi 52/48; films 500 Days of Summer 52/48, Lady Bird 53/47 |
-| BLACKPINK + Harry Potter, coffee in Seoul | Agent switched "Harry Potter" from the album to the TV show; 5TO7 56/44, Humming Bella 59/41 |
+| Lady Gaga + Stranger Things, coffee in Melbourne | "Stranger Things" first matched a film with almost no taste data, so the agent switched to the TV show, then widened the search; Ample Cafe & Bar 49/51, Krispy Kreme Swanston St 50/50; films It 51/49, Get Out 50/50 |
+| Studio Ghibli + Christopher Nolan, culture in Tokyo | Museums 61/39; Qloo has almost no film signal for Nolan as a person, so the agent tries each reading and then warns the user instead of faking a fair film pick |
 
 ## Use it from Claude, ChatGPT or any MCP client
 
