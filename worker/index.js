@@ -2,17 +2,24 @@
 // Routes: the web app, a JSON/NDJSON planning API and an MCP endpoint for AI agents.
 import { ORIGIN, tidy, entity } from './qloo.js';
 import { plan, bridge, balancedFilms, shares, parseInput, OCCASIONS } from './engine.js';
+import { evening, parseEvening } from './evening.js';
 import { handleMcp } from './mcp.js';
 import { page } from './page.js';
+import { appRoute } from './app.js';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 
+// Two planners share the same routes: the quick shortlist and the "Tonight" evening plan.
+const MODES = {
+  plan: { run: plan, key: (input) => { const q = parseInput(input); return ['plan', q.first, q.second, q.city, q.occasion]; } },
+  evening: { run: evening, key: (input) => { const q = parseEvening(input); return ['evening', q.first, q.second, q.city, q.near?.lat, q.near?.lon, q.start, q.day, q.cuisine, q.mood, q.budget]; } },
+};
+
 // Ten-minute result cache, keyed by the normalised request.
 const cache = new Map();
-function cacheKey(input) {
+function cacheKey(mode, input) {
   try {
-    const { first, second, city, occasion } = parseInput(input);
-    return [first, second, city, occasion].join('|').toLowerCase();
+    return MODES[mode].key(input).join('|').toLowerCase();
   } catch {
     return null;
   }
@@ -43,7 +50,7 @@ function allow(request, limit = LIMIT, bucket = 'web') {
 const qlooOrigin = (env) => ['https://api.qloo.com', 'https://hackathon.api.qloo.com'].includes(env.QLOO_API_URL) ? env.QLOO_API_URL : ORIGIN;
 
 // Streams agent steps as they happen, then the plan: one JSON object per line.
-function streamPlan(input, key, origin, cached, allowed) {
+function streamPlan(mode, input, key, origin, cached, allowed) {
   const encoder = new TextEncoder();
   const body = new ReadableStream({
     async start(controller) {
@@ -55,8 +62,8 @@ function streamPlan(input, key, origin, cached, allowed) {
         } else if (!allowed()) {
           send({ event: 'error', error: 'Too many plans from this connection. Try again in a few minutes.' });
         } else {
-          const result = await plan(input, key, origin, (step) => send({ event: 'step', step }));
-          const k = cacheKey(input);
+          const result = await MODES[mode].run(input, key, origin, (step) => send({ event: 'step', step }));
+          const k = cacheKey(mode, input);
           if (k) remember(k, result);
           send({ event: 'result', plan: result });
         }
@@ -69,22 +76,25 @@ function streamPlan(input, key, origin, cached, allowed) {
   return new Response(body, { headers: { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' } });
 }
 
-async function planRoute(request, env) {
+async function planRoute(mode, request, env) {
   if (request.method !== 'POST') return json({ error: 'Use POST.' }, 405);
   if (!env.QLOO_API_KEY) return json({ error: 'Live Qloo data is not configured yet. Try the clearly labeled sample while the key is being added.' }, 503);
   if (Number(request.headers.get('content-length') || 0) > 3000) return json({ error: 'Request is too large.' }, 413);
   let input;
   try { input = await request.json(); } catch { return json({ error: 'Invalid JSON.' }, 400); }
-  const key = cacheKey(input);
-  if (!key) return json({ error: 'Enter two favorites and a city.' }, 422);
+  const key = cacheKey(mode, input);
+  if (!key) {
+    try { MODES[mode].key(input); } catch (error) { return json({ error: error.message }, 422); }
+    return json({ error: 'Invalid request.' }, 422);
+  }
   const hit = cache.get(key);
   const cached = hit && hit.expires > Date.now() ? hit.value : null;
   const origin = qlooOrigin(env);
-  if ((request.headers.get('accept') || '').includes('application/x-ndjson')) return streamPlan(input, env.QLOO_API_KEY, origin, cached, () => allow(request));
+  if ((request.headers.get('accept') || '').includes('application/x-ndjson')) return streamPlan(mode, input, env.QLOO_API_KEY, origin, cached, () => allow(request));
   if (cached) return json(cached);
   if (!allow(request)) return json({ error: 'Too many plans from this connection. Try again in a few minutes.' }, 429);
   try {
-    const result = await plan(input, env.QLOO_API_KEY, origin);
+    const result = await MODES[mode].run(input, env.QLOO_API_KEY, origin);
     remember(key, result);
     return json(result);
   } catch (error) {
@@ -98,7 +108,10 @@ export default {
     if (url.pathname === '/') return new Response(page, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=60' } });
     if (url.pathname === '/health') return json({ ok: true });
     if (url.pathname === '/api/status') return json({ live: Boolean(env.QLOO_API_KEY), occasions: Object.keys(OCCASIONS), mcp: url.origin + '/mcp' });
-    if (url.pathname === '/api/plan') return planRoute(request, env);
+    if (url.pathname === '/api/plan') return planRoute('plan', request, env);
+    if (url.pathname === '/api/evening') return planRoute('evening', request, env);
+    const app = appRoute(url.pathname);
+    if (app) return app;
     if (url.pathname === '/mcp') return handleMcp(request, env, qlooOrigin(env), () => allow(request, MCP_LIMIT, 'mcp'));
     return json({ error: 'Not found.' }, 404);
   },

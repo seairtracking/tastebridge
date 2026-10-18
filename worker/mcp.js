@@ -1,10 +1,11 @@
 // Minimal MCP server (Streamable HTTP, JSON responses) so AI agents such as Claude or ChatGPT
 // can call TasteBridge as a tool. Stateless: every POST /mcp carries one JSON-RPC message or a batch.
 import { plan, OCCASIONS } from './engine.js';
+import { evening, CUISINES, MOODS } from './evening.js';
 import { searchEntities, kind } from './qloo.js';
 
 const PROTOCOL = '2025-06-18';
-const SERVER = { name: 'tastebridge', title: 'TasteBridge', version: '2.0.0' };
+const SERVER = { name: 'tastebridge', title: 'TasteBridge', version: '2.1.0' };
 
 const TOOLS = [
   {
@@ -20,6 +21,29 @@ const TOOLS = [
         occasion: { type: 'string', enum: Object.keys(OCCASIONS), description: 'Kind of outing. Defaults to dinner.' },
       },
       required: ['first', 'second', 'city'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: 'plan_evening',
+    title: 'Plan a whole evening for two',
+    description: 'Plan an evening for two people after work: dinner that fits both tastes (optionally a cuisine, a mood and a budget), a second stop within walking distance, a live music or show venue nearby, and a film for home. Every stop is ranked for fairness with Qloo explainability, with photos, ratings, price level, map and website links, walking time and opening hours where Qloo has them. Give a city, or a latitude and longitude for "near me". Qloo has no event listings, so show venues link to their own programme.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        first: { type: 'string', description: 'Person one’s favorite: an artist, film, book, TV show or game.' },
+        second: { type: 'string', description: 'Person two’s favorite.' },
+        city: { type: 'string', description: 'City to plan in. Optional when lat and lon are given.' },
+        lat: { type: 'number', description: 'Latitude to start near (for example the office).' },
+        lon: { type: 'number', description: 'Longitude to start near.' },
+        start: { type: 'string', description: 'Dinner time as HH:MM, e.g. "18:30". Defaults to 18:30.' },
+        day: { type: 'string', enum: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'], description: 'Day of the week, used to check opening hours.' },
+        cuisine: { type: 'string', enum: CUISINES, description: 'What to eat.' },
+        mood: { type: 'string', enum: MOODS, description: 'The feel of the evening.' },
+        budget: { type: 'integer', minimum: 1, maximum: 4, description: 'Highest price level, 1 ($) to 4 ($$$$).' },
+      },
+      required: ['first', 'second'],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
@@ -54,7 +78,28 @@ function summary(p) {
   return lines.join('\n');
 }
 
+function eveningSummary(p) {
+  const pct = (s) => (s ? ` (${s.a}% ${p.seeds[0].name} / ${s.b}% ${p.seeds[1].name})` : '');
+  const place = (x) => {
+    const facts = [x.category, x.rating ? `★${x.rating}` : '', x.price ? '$'.repeat(x.price) : '', x.walk ? `${x.walk.minutes} min walk` : '', x.open === 'open' ? 'open then' : '', x.liveMusic ? 'live music' : ''].filter(Boolean).join(', ');
+    const links = [x.map && `map: ${x.map}`, x.website && `website: ${x.website}`].filter(Boolean).join(' · ');
+    return `${x.name}${facts ? ` [${facts}]` : ''}${pct(x.share)}${links ? ` (${links})` : ''}`;
+  };
+  return [
+    `An evening ${p.city === 'near you' ? 'near you' : 'in ' + p.city} from ${p.start} for a fan of ${p.seeds[0].name} and a fan of ${p.seeds[1].name}${p.cuisine ? `, ${p.cuisine} food` : ''}${p.mood ? `, ${p.mood} mood` : ''}:`,
+    ...p.stops.map((s) => `${s.time} ${s.title}: ${place(s.options[0])}${s.options.length > 1 ? `. Or: ${s.options.slice(1).map((x) => x.name).join(', ')}` : ''}.`),
+    `Back home: ${p.films.map((f) => f.name + (f.year ? ` (${f.year})` : '') + pct(f.share)).join('; ') || 'no film found'}.`,
+    'Qloo has no event listings, so check the show venue’s website for tonight’s programme.',
+    ...(p.warning ? [`Note: ${p.warning}`] : []),
+    `How the agent decided: ${p.steps.map((s) => s.detail).join(' ')}`,
+  ].join('\n');
+}
+
 async function callTool(name, args, env, origin) {
+  if (name === 'plan_evening') {
+    const result = await evening(args, env.QLOO_API_KEY, origin);
+    return { content: [{ type: 'text', text: eveningSummary(result) }], structuredContent: result };
+  }
   if (name === 'find_common_ground') {
     const result = await plan(args, env.QLOO_API_KEY, origin);
     return { content: [{ type: 'text', text: summary(result) }], structuredContent: result };
@@ -80,7 +125,7 @@ async function handle(message, env, origin, allow) {
         protocolVersion: typeof params?.protocolVersion === 'string' ? params.protocolVersion : PROTOCOL,
         capabilities: { tools: { listChanged: false } },
         serverInfo: SERVER,
-        instructions: 'Ask each person for one cultural favorite and agree on a city, then call find_common_ground. Present the shortlist with each person’s share so both can see it is fair.',
+        instructions: 'Ask each person for one cultural favorite and agree on a city. For a whole evening (dinner, a nearby second stop, a show, a film) call plan_evening; for a quick shortlist call find_common_ground. Present the shortlist with each person’s share so both can see it is fair.',
       });
     case 'ping':
       return reply({});

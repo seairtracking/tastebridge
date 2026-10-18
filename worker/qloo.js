@@ -36,8 +36,15 @@ export function entity(item) {
     lon: Number.isFinite(item?.location?.lon) ? item.location.lon : null,
     year: Number.isInteger(year) && year > 1850 && year < 2100 ? year : null,
     genres: Array.isArray(p.genres) ? p.genres.filter((g) => typeof g === 'string').slice(0, 2).map((g) => tidy(g, 30)) : [],
+    // Evening planning: the feel of the place, its cuisines, live music and opening hours.
+    ambience: tagNames(tags, 'urn:tag:ambience:qloo:'),
+    cuisines: tagNames(tags, 'urn:tag:genre:place:restaurant:'),
+    liveMusic: p.live_music === true || p.live_music === 'true',
+    hours: p.hours && typeof p.hours === 'object' ? p.hours : null,
   };
 }
+
+const tagNames = (tags, prefix) => tags.filter((t) => t.startsWith(prefix)).map((t) => t.slice(prefix.length));
 
 // Only plain web links reach the page; anything else (javascript:, data:, malformed) is dropped.
 function safeUrl(value, protocols) {

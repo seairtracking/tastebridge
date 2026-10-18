@@ -66,13 +66,20 @@ export function placeDetails(x) {
 }
 export const filmDetails = (f) => ({ image: f.image || null, year: f.year ?? null, genres: f.genres || [] });
 
+// Plans are for friends, couples and colleagues: adult entertainment venues are never suggested.
+// Qloo files some of them as ordinary night clubs, so names are checked as well as categories.
+const ADULT_NAME = /\b(strip ?clubs?|strippers?|gentlemen'?s club|male revue|hunk-?o-?mania|chippendales|topless|erotic|xxx|peep ?show)\b/i;
+export function adultVenue(x) {
+  return (x?.categories || []).some((c) => /^adult_entertainment|strip_club/.test(c)) || (x?.ambience || []).includes('adult') || ADULT_NAME.test(x?.name || '');
+}
+
 // Fairness-weighted reciprocal-rank ranking over each person's list and the combined list.
-export function bridge(a, b, joint, { seeds = [], take = 4, city = '', fits = null } = {}) {
+export function bridge(a, b, joint, { seeds = [], take = 4, city = '', fits = null, boost = () => 1, extra = () => ({}) } = {}) {
   const key = cityKey(city);
   const rank = (list) => new Map(list.map((x, i) => [x.id, i + 1]));
   const ra = rank(a), rb = rank(b), rj = rank(joint);
   const pool = new Map([...a, ...b, ...joint].map((x) => [x.id, x])); // combined entries win: they carry explainability
-  return [...pool.values()].map((x) => {
+  return [...pool.values()].filter((x) => !adultVenue(x)).map((x) => {
     const ar = ra.get(x.id) || null, br = rb.get(x.id) || null, jr = rj.get(x.id) || null;
     const av = ar ? 1 / (4 + ar) : 0, bv = br ? 1 / (4 + br) : 0, jv = jr ? 1 / (4 + jr) : 0;
     let score = Math.min(av, bv) * 6 + (av + bv) * 0.8 + jv * 1.3;
@@ -80,10 +87,11 @@ export function bridge(a, b, joint, { seeds = [], take = 4, city = '', fits = nu
     if (mainstream) score *= 0.85; // nudge away from the most generic landmarks
     if (!inCity(x.address, key)) score *= 0.35; // outside the city the user asked for
     score *= occasionFit(x.categories, fits); // e.g. a museum with a bar is not really a drinks spot
+    score *= boost(x); // evening plans: mood, cuisine, distance, opening hours, budget
     const share = shares(x, seeds[0], seeds[1]) || (av + bv > 0 ? { a: Math.round((av / (av + bv)) * 100), b: 100 - Math.round((av / (av + bv)) * 100) } : null);
     const reason = ar && br ? 'In both people’s individual Qloo lists.' : jr ? 'In Qloo’s combined-taste list for the pair.' : 'A strong pick for one person.';
     const fit = occasionFit(x.categories, fits);
-    return { id: x.id, name: x.name, address: x.address, category: (x.categories?.[0] || '').replace(/_/g, ' '), ...placeDetails(x), aRank: ar, bRank: br, jointRank: jr, share, mainstream, fit, reason, score };
+    return { id: x.id, name: x.name, address: x.address, category: (x.categories?.[0] || '').replace(/_/g, ' '), ...placeDetails(x), ...extra(x), aRank: ar, bRank: br, jointRank: jr, share, mainstream, fit, reason, score };
   }).sort((x, y) => y.score - x.score)
     .filter((x, i, all) => all.findIndex((y) => y.name.toLowerCase() === x.name.toLowerCase()) === i)
     .slice(0, take)
@@ -109,12 +117,8 @@ export function parseInput(input) {
   return { first, second, city, occasion };
 }
 
-export async function plan(input, key, origin = ORIGIN, onStep = () => {}) {
-  const { first, second, city, occasion } = parseInput(input);
-  const occ = OCCASIONS[occasion];
-  const steps = [];
-  const step = (id, label, detail) => { const s = { id, label, detail }; steps.push(s); onStep(s); };
-
+// Resolves both favorites and checks that each one really shapes Qloo's results (see `plan`).
+export async function understand(first, second, key, origin, step) {
   step('resolve', 'Understanding both tastes', `Looking up “${first}” and “${second}” in Qloo’s taste graph.`);
   const [ca, cb] = await Promise.all([candidates(first, key, origin), candidates(second, key, origin)]);
   let a = ca[0], b = cb.find((x) => x.id !== a.id);
@@ -147,6 +151,45 @@ export async function plan(input, key, origin = ORIGIN, onStep = () => {}) {
     filmList = await probe();
   }
 
+  return { a, b, filmList, warning };
+}
+
+// Films closest to an even split; falls back to one film per person when there is no shared film taste.
+export async function pickFilms(filmList, a, b, key, origin, step) {
+  step('films', 'Finding a film for both', 'Asking Qloo which films sit between both tastes, then keeping the most evenly shared ones.');
+  let films = balancedFilms(filmList, [a.id, b.id], new Set([a.id, b.id]));
+  let filmNote = 'Films closest to an even split between both tastes, according to Qloo explainability.';
+  const best = films[0]?.share ? Math.min(films[0].share.a, films[0].share.b) : 0;
+  if (best < 15) {
+    // Almost no shared film taste: alternate one pick for each person instead of pretending there is overlap.
+    step('refine', 'Little film overlap', 'Qloo’s combined film list leans almost entirely to one person, so the agent picks a film for each of them.');
+    const [aFilms, bFilms] = await Promise.all([
+      soft(insights({ 'filter.type': 'urn:entity:movie', 'signal.interests.entities': a.id, take: 5 }, key, origin)),
+      soft(insights({ 'filter.type': 'urn:entity:movie', 'signal.interests.entities': b.id, take: 5 }, key, origin)),
+    ]);
+    const skip = new Set([a.id, b.id]);
+    const pickA = aFilms.find((f) => !skip.has(f.id));
+    const pickB = bFilms.find((f) => !skip.has(f.id) && f.id !== pickA?.id);
+    const fallback = [pickA && { id: pickA.id, name: pickA.name, ...filmDetails(pickA), share: { a: 100, b: 0 }, for: a.name }, pickB && { id: pickB.id, name: pickB.name, ...filmDetails(pickB), share: { a: 0, b: 100 }, for: b.name }].filter(Boolean);
+    if (fallback.length === 2) { films = fallback; filmNote = 'Qloo found little shared film taste, so here is one pick for each of you.'; }
+    else if (fallback.length) {
+      // Only one side has its own film list: show that pick next to the closest shared films, with their real shares.
+      films = [fallback[0], ...films.filter((f) => f.id !== fallback[0].id)].slice(0, 3);
+      filmNote = `Qloo found little shared film taste, so the first pick is for ${fallback[0].for} and the others are the closest shared films.`;
+    }
+    else filmNote = 'Qloo found little shared film taste for this pair; these lean toward one person.';
+  }
+  return { films, filmNote };
+}
+
+export async function plan(input, key, origin = ORIGIN, onStep = () => {}) {
+  const { first, second, city, occasion } = parseInput(input);
+  const occ = OCCASIONS[occasion];
+  const steps = [];
+  const step = (id, label, detail) => { const s = { id, label, detail }; steps.push(s); onStep(s); };
+
+  const { a, b, filmList, warning } = await understand(first, second, key, origin, step);
+
   // A good pick is in the city and is mainly the kind of place the occasion calls for.
   const good = (list) => list.filter((p) => inCity(p.address, cityKey(city)) && p.fit === 1).length;
   let places = [], strong = -1;
@@ -172,29 +215,7 @@ export async function plan(input, key, origin = ORIGIN, onStep = () => {}) {
   if (!places.length) throw new Error(`Qloo found no places near ${city} for this pair. Try another city or occasion.`);
   step('rank', 'Ranking for fairness', `Scored candidates by how well they serve both people, using Qloo explainability to show each person’s share.`);
 
-  step('films', 'Finding a film for both', 'Asking Qloo which films sit between both tastes, then keeping the most evenly shared ones.');
-  let films = balancedFilms(filmList, [a.id, b.id], new Set([a.id, b.id]));
-  let filmNote = 'Films closest to an even split between both tastes, according to Qloo explainability.';
-  const best = films[0]?.share ? Math.min(films[0].share.a, films[0].share.b) : 0;
-  if (best < 15) {
-    // Almost no shared film taste: alternate one pick for each person instead of pretending there is overlap.
-    step('refine', 'Little film overlap', 'Qloo’s combined film list leans almost entirely to one person, so the agent picks a film for each of them.');
-    const [aFilms, bFilms] = await Promise.all([
-      soft(insights({ 'filter.type': 'urn:entity:movie', 'signal.interests.entities': a.id, take: 5 }, key, origin)),
-      soft(insights({ 'filter.type': 'urn:entity:movie', 'signal.interests.entities': b.id, take: 5 }, key, origin)),
-    ]);
-    const skip = new Set([a.id, b.id]);
-    const pickA = aFilms.find((f) => !skip.has(f.id));
-    const pickB = bFilms.find((f) => !skip.has(f.id) && f.id !== pickA?.id);
-    const fallback = [pickA && { id: pickA.id, name: pickA.name, ...filmDetails(pickA), share: { a: 100, b: 0 }, for: a.name }, pickB && { id: pickB.id, name: pickB.name, ...filmDetails(pickB), share: { a: 0, b: 100 }, for: b.name }].filter(Boolean);
-    if (fallback.length === 2) { films = fallback; filmNote = 'Qloo found little shared film taste, so here is one pick for each of you.'; }
-    else if (fallback.length) {
-      // Only one side has its own film list: show that pick next to the closest shared films, with their real shares.
-      films = [fallback[0], ...films.filter((f) => f.id !== fallback[0].id)].slice(0, 3);
-      filmNote = `Qloo found little shared film taste, so the first pick is for ${fallback[0].for} and the others are the closest shared films.`;
-    }
-    else filmNote = 'Qloo found little shared film taste for this pair; these lean toward one person.';
-  }
+  const { films, filmNote } = await pickFilms(filmList, a, b, key, origin, step);
   step('done', 'Plan ready', `${places.length} ${occ.plural} and ${films.length} films for both of you.`);
 
   return {

@@ -72,6 +72,15 @@ test("bridge prefers places whose main category suits the occasion", () => {
   assert.equal(occasionFit([], OCCASIONS.drinks.fits), 1);
 });
 
+test("bridge never suggests adult entertainment venues", () => {
+  const list = [
+    { id: id(23), name: "Hunk-O-Mania Male Revue NYC", categories: ["night_club"] },
+    { id: id(24), name: "Velvet Club", categories: ["adult_entertainment_club"] },
+    { id: id(25), name: "Blue Note", categories: ["jazz_club"] },
+  ];
+  assert.deepEqual(bridge(list, list, []).map((p) => p.name), ["Blue Note"]);
+});
+
 test("bridge drops duplicate venue names Qloo stores as separate records", () => {
   const result = bridge([{ id: id(20), name: "Big Ben" }], [{ id: id(21), name: "Big ben" }], [{ id: id(22), name: "Tower Bridge" }]);
   assert.equal(result.filter((p) => p.name.toLowerCase() === "big ben").length, 1);
@@ -191,7 +200,7 @@ test("MCP: initialize, tools/list and notifications", async () => {
   const note = await rpc({ jsonrpc: "2.0", method: "notifications/initialized" });
   assert.equal(note.status, 202);
   const list = await (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })).json();
-  assert.deepEqual(list.result.tools.map((t) => t.name), ["find_common_ground", "resolve_favorite"]);
+  assert.deepEqual(list.result.tools.map((t) => t.name), ["find_common_ground", "plan_evening", "resolve_favorite"]);
   const missing = await (await rpc({ jsonrpc: "2.0", id: 3, method: "nope" })).json();
   assert.equal(missing.error.code, -32601);
 });
@@ -209,4 +218,89 @@ test("MCP: find_common_ground returns text and structured content", async () => 
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+// ---- Tonight mode ----
+import { evening, metres, openAt, parseEvening } from "../worker/evening.js";
+
+test("metres and openAt handle walking distance, late closing and unreliable hours", () => {
+  assert.equal(Math.round(metres({ lat: 40.757, lon: -73.9866 }, { lat: 40.7536, lon: -73.9832 }) / 10) * 10, 470); // about 378 m north-south and 287 m east-west
+  const hours = { friday: [{ opens: "T17:00:00", closes: "T01:00:00", closed: false }], saturday: [{ opens: null, closes: null, closed: true }] };
+  assert.equal(openAt(hours, "friday", "18:30"), "open");
+  assert.equal(openAt(hours, "friday", "16:00"), "closed");
+  assert.equal(openAt(hours, "saturday", "00:30"), "open"); // still Friday's late night
+  const allClosed = Object.fromEntries(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].map((d) => [d, [{ closed: true }]]));
+  assert.equal(openAt(allClosed, "friday", "19:00"), "unknown");
+  assert.equal(openAt(null, "friday", "19:00"), "unknown");
+});
+
+test("parseEvening validates choices and keeps location coarse", () => {
+  const q = parseEvening({ first: "Lady Gaga", second: "Stranger Things", lat: 10.776912, lon: 106.700981, cuisine: "sushi", mood: "romantic", budget: "9", start: "19:05" });
+  assert.deepEqual(q.near, { lat: 10.7769, lon: 106.701 });
+  assert.equal(q.cuisine, null);
+  assert.equal(q.mood, "romantic");
+  assert.equal(q.budget, null);
+  assert.equal(q.start, "19:05");
+  assert.throws(() => parseEvening({ first: "Lady Gaga", second: "Stranger Things" }), /city or use your location/);
+});
+
+function fakeEveningQloo() {
+  const reply = (body) => new Response(JSON.stringify(body));
+  const place = (n, name, cats, extra, lat, lon, x, y) => item(n, name, {
+    location: { lat, lon },
+    tags: cats.map((c) => ({ id: c })),
+    properties: { address: "1 Main St, New York", business_rating: 4.5, price_level: 2, image: { url: `https://images.qloo.com/${n}.jpg` }, ...extra },
+    query: { explainability: { "signal.interests.entities": [{ entity_id: x, score: 0.5 }, { entity_id: y || x, score: 0.5 }] } },
+  });
+  return async (url) => {
+    const u = new URL(String(url)), q = (k) => u.searchParams.get(k);
+    if (u.pathname === "/search") return reply({ results: [item(q("query") === "Spirited Away" ? 1 : 2, q("query"), { types: [q("query") === "Spirited Away" ? "urn:entity:movie" : "urn:entity:artist"] })] });
+    const [x, y] = q("signal.interests.entities").split(",");
+    if (q("filter.type") === "urn:entity:movie") return reply({ results: { entities: [explained(60, "Inception", 0.5, 0.5)] } });
+    const tags = q("filter.tags") || "";
+    if (tags.includes("restaurant")) return reply({ results: { entities: [
+      place(70, "Sushi Place", ["urn:tag:category:place:japanese_restaurant", "urn:tag:genre:place:restaurant:japanese", "urn:tag:ambience:qloo:romantic"], {}, 40.7570, -73.9866, x, y),
+      place(71, "Ramen Bar", ["urn:tag:category:place:ramen_restaurant", "urn:tag:genre:place:restaurant:japanese"], {}, 40.7580, -73.9850, x, y),
+      place(72, "Steak House", ["urn:tag:category:place:steakhouse"], {}, 40.7590, -73.9840, x, y),
+    ] } });
+    if (tags.includes("live_music")) return reply({ results: { entities: [
+      place(90, "Jazz Room", ["urn:tag:category:place:jazz_club"], { live_music: true }, 40.7600, -73.9870, x, y),
+    ] } });
+    return reply({ results: { entities: [
+      place(80, "Wine Bar", ["urn:tag:category:place:wine_bar"], {}, 40.7575, -73.9860, x, y),
+      place(81, "Far Pub", ["urn:tag:category:place:pub"], {}, 40.7700, -73.9700, x, y),
+    ] } });
+  };
+}
+
+test("evening plans dinner by cuisine and mood, then a nearby stop, a show and a film", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fakeEveningQloo();
+  try {
+    const p = await evening({ first: "Spirited Away", second: "Daft Punk", city: "New York", cuisine: "japanese", mood: "romantic", start: "18:30", day: "friday" }, "k", "https://hackathon.api.qloo.com");
+    assert.equal(p.mode, "evening");
+    assert.deepEqual(p.stops.map((s) => s.slot), ["dinner", "after", "show"]);
+    assert.equal(p.stops[0].options[0].name, "Sushi Place"); // matches cuisine and mood
+    assert.equal(p.stops[0].options[0].moodMatch, true);
+    assert.equal(p.stops[1].time, "20:15");
+    assert.equal(p.stops[1].options[0].name, "Wine Bar"); // the closer stop wins
+    assert.ok(p.stops[1].options[0].walk.minutes <= 2);
+    assert.equal(p.stops[2].options[0].name, "Jazz Room");
+    assert.equal(p.stops[2].options[0].liveMusic, true);
+    assert.equal(p.films[0].name, "Inception");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("MCP lists plan_evening and the app serves its manifest, worker and icons", async () => {
+  const list = await (await rpc({ jsonrpc: "2.0", id: 9, method: "tools/list" })).json();
+  assert.ok(list.result.tools.some((t) => t.name === "plan_evening"));
+  for (const [path, type] of [["/manifest.webmanifest", /manifest/], ["/sw.js", /javascript/], ["/icon-512.png", /png/], ["/apple-touch-icon.png", /png/]]) {
+    const res = await worker.fetch(new Request("http://x" + path), {});
+    assert.equal(res.status, 200, path);
+    assert.match(res.headers.get("content-type"), type);
+  }
+  const manifest = await (await worker.fetch(new Request("http://x/manifest.webmanifest"), {})).json();
+  assert.equal(manifest.display, "standalone");
 });
