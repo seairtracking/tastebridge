@@ -8,6 +8,7 @@ from each person, a city and an occasion (dinner, drinks, coffee, culture or a n
 by each person**, using Qloo explainability, so nobody's taste quietly wins.
 
 - **Live demo:** https://tastebridge.trackingport.com
+- **Demo video (1:44):** https://youtu.be/WYHLv6PQkuU
 - **MCP server for AI assistants:** `https://tastebridge.trackingport.com/mcp`
 - Built for the **Qloo Agentic Hackathon** (2026)
 
