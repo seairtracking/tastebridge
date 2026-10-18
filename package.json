@@ -1,0 +1,16 @@
+{
+  "name": "tastebridge-qloo",
+  "version": "1.0.0",
+  "description": "A Qloo-powered group discovery agent that finds fair places and films for two people with different tastes.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "start": "node --env-file=.env local-server.mjs",
+    "test": "node --test tests/tastebridge.test.mjs",
+    "deploy:cloudflare": "npx wrangler deploy"
+  }
+}

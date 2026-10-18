@@ -1,0 +1,8 @@
+# Optional: deploy TasteBridge as a Cloudflare Worker.
+# Set the key once with: npx wrangler secret put QLOO_API_KEY
+name = "tastebridge-qloo"
+main = "worker/index.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+QLOO_API_URL = "https://hackathon.api.qloo.com"
