@@ -72,7 +72,8 @@ that is fair to both."*
 The hackathon key allows only a few requests in flight. TasteBridge queues Qloo calls (at most 3 at a
 time), retries `429 Rate limit exceeded` with backoff, tolerates a failing side list, removes duplicate
 venues that Qloo stores as separate records, caches identical plans for 10 minutes, and limits each
-client to 20 fresh plans per 10 minutes across the web app and MCP.
+client to 20 fresh plans per 10 minutes in the web app (120 for MCP, because Claude and ChatGPT calls
+arrive from a few shared provider addresses).
 
 ## Privacy
 

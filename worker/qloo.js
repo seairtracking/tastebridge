@@ -92,7 +92,7 @@ export async function insights(params, key, origin) {
   return rows(await requestQloo('/v2/insights', params, key, origin)).map(entity).filter(Boolean);
 }
 
-const KINDS = { artist: 'artist', movie: 'film', book: 'book', author: 'author', tv_show: 'TV show', podcast: 'podcast', video_game: 'video game', brand: 'brand', person: 'person', place: 'place', destination: 'destination' };
+const KINDS = { artist: 'artist', movie: 'film', book: 'book', author: 'author', tv_show: 'TV show', podcast: 'podcast', video_game: 'video game', videogame: 'video game', album: 'album', brand: 'brand', person: 'person', place: 'place', destination: 'destination' };
 export function kind(item) {
   const type = (item?.types || []).find((t) => t.startsWith('urn:entity:'));
   return KINDS[type?.slice('urn:entity:'.length)] || 'favorite';

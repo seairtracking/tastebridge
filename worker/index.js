@@ -23,16 +23,17 @@ function remember(key, value) {
 }
 
 // Per-client limit on fresh plans, shared by the web app and MCP tool calls.
-const LIMIT = 20, WINDOW = 600000;
+// MCP gets a higher limit: calls from Claude or ChatGPT arrive from a few shared provider addresses.
+const LIMIT = 20, MCP_LIMIT = 120, WINDOW = 600000;
 const hits = new Map();
 function clientId(request) {
   const forwarded = (request.headers.get('x-forwarded-for') || '').split(',').map((s) => s.trim()).filter(Boolean);
   return request.headers.get('cf-connecting-ip') || forwarded.at(-1) || 'local';
 }
-function allow(request) {
-  const id = clientId(request), now = Date.now();
+function allow(request, limit = LIMIT, bucket = 'web') {
+  const id = bucket + ':' + clientId(request), now = Date.now();
   const recent = (hits.get(id) || []).filter((t) => now - t < WINDOW);
-  if (recent.length >= LIMIT) { hits.set(id, recent); return false; }
+  if (recent.length >= limit) { hits.set(id, recent); return false; }
   recent.push(now);
   if (hits.size > 5000) hits.clear();
   hits.set(id, recent);
@@ -98,7 +99,7 @@ export default {
     if (url.pathname === '/health') return json({ ok: true });
     if (url.pathname === '/api/status') return json({ live: Boolean(env.QLOO_API_KEY), occasions: Object.keys(OCCASIONS), mcp: url.origin + '/mcp' });
     if (url.pathname === '/api/plan') return planRoute(request, env);
-    if (url.pathname === '/mcp') return handleMcp(request, env, qlooOrigin(env), () => allow(request));
+    if (url.pathname === '/mcp') return handleMcp(request, env, qlooOrigin(env), () => allow(request, MCP_LIMIT, 'mcp'));
     return json({ error: 'Not found.' }, 404);
   },
 };
