@@ -3,6 +3,7 @@
 import { tidy } from './qloo.js';
 import { CUISINES, MOODS, SPECIALS } from './evening.js';
 import { OCCASIONS } from './engine.js';
+import { cleanProfile, profileSize } from './taste.js';
 const SESSION_DAYS = 30; // matches store.js; kept here so the router never loads node:sqlite
 
 const COOKIE = 'tb_session';
@@ -138,6 +139,10 @@ export async function handleSocial(request, env, { allow, runPlan }) {
         cuisine: CUISINES.includes(body.cuisine) ? body.cuisine : '', mood: MOODS.includes(body.mood) ? body.mood : '',
       });
       return json({ user });
+    }
+    if (action === 'taste' && request.method === 'PUT') {
+      const taste = cleanProfile(body.taste);
+      return json({ user: store.setTaste(me.id, profileSize(taste) || taste.hobbies.length || taste.instruments.length ? taste : null) });
     }
     if (action.startsWith('friends') && request.method === 'POST') {
       const other = store.userByName(tidy(body.username, 20));

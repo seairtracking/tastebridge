@@ -96,6 +96,8 @@ export const MSG = {
   'kind.album': ['album', 'album', 'アルバム', '앨범', '专辑', 'อัลบั้ม', 'album', 'álbum', 'album', 'Album'],
   'kind.brand': ['brand', 'thương hiệu', 'ブランド', '브랜드', '品牌', 'แบรนด์', 'merek', 'marca', 'marque', 'Marke'],
   'kind.person': ['person', 'nhân vật', '人物', '인물', '人物', 'บุคคล', 'tokoh', 'persona', 'personnalité', 'Person'],
+  'kind.destination': ['destination', 'điểm đến', '旅行先', '여행지', '目的地', 'จุดหมาย', 'destinasi', 'destino', 'destination', 'Reiseziel'],
+  'kind.taste profile': ['taste profile', 'hồ sơ gu', '好みプロフィール', '취향 프로필', '口味档案', 'โปรไฟล์รสนิยม', 'profil selera', 'perfil de gustos', 'profil de goûts', 'Geschmacksprofil'],
   'kind.favorite': ['favorite', 'sở thích', 'お気に入り', '좋아하는 것', '喜好', 'สิ่งที่ชอบ', 'favorit', 'favorito', 'coup de cœur', 'Favorit'],
   'cuisine.vietnamese': ['Vietnamese', 'Việt', 'ベトナム料理', '베트남 음식', '越南菜', 'เวียดนาม', 'Vietnam', 'vietnamita', 'vietnamienne', 'Vietnamesisch'],
   'cuisine.japanese': ['Japanese', 'Nhật', '和食', '일식', '日本料理', 'ญี่ปุ่น', 'Jepang', 'japonesa', 'japonaise', 'Japanisch'],

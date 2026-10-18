@@ -115,11 +115,16 @@ export async function candidates(name, key, origin, limit = 4) {
 }
 
 // Suggestions while typing a favorite: taste entities only (no venues), best readings first.
-export async function suggest(text, key, origin) {
+export async function suggest(text, key, origin, types = []) {
   // Accent-insensitive, so "son tung" finds "Sơn Tùng M-TP"; only real taste kinds (no places, regions or unknown types).
   const fold = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/gi, 'd').toLowerCase();
   const q = fold(text);
-  const matches = (await searchEntities(text, key, origin, 10)).filter((x) => !['favorite', 'place', 'destination'].includes(kind(x)));
+  // The taste profile asks for one section at a time (only films, only books…); Qloo search filters by type.
+  const wanted = types.map((t) => 'urn:entity:' + t);
+  const found = wanted.length
+    ? rows(await requestQloo('/search', { query: text, take: 10, types: wanted.join(',') }, key, origin)).map(entity).filter(Boolean)
+    : await searchEntities(text, key, origin, 10);
+  const matches = found.filter((x) => (wanted.length ? x.types.some((t) => wanted.includes(t)) : !['favorite', 'place', 'destination'].includes(kind(x))));
   const rank = (x) => (fold(x.name) === q ? 0 : fold(x.name).startsWith(q) ? 1 : 2) * 100 + typeRank(x);
   return matches.sort((a, b) => rank(a) - rank(b)).slice(0, 6).map((x) => ({ id: x.id, name: x.name, kind: kind(x) }));
 }
@@ -132,7 +137,7 @@ export async function insights(params, key, origin) {
   return rows(await requestQloo('/v2/insights', params, key, origin)).map(entity).filter(Boolean);
 }
 
-const KINDS = { artist: 'artist', movie: 'film', book: 'book', author: 'author', tv_show: 'TV show', podcast: 'podcast', video_game: 'video game', videogame: 'video game', album: 'album', brand: 'brand', person: 'person', place: 'place', destination: 'destination' };
+const KINDS = { artist: 'artist', movie: 'film', book: 'book', author: 'author', tv_show: 'TV show', podcast: 'podcast', video_game: 'video game', videogame: 'video game', album: 'album', brand: 'brand', profile: 'taste profile', person: 'person', place: 'place', destination: 'destination' };
 export function kind(item) {
   const type = (item?.types || []).find((t) => t.startsWith('urn:entity:'));
   return KINDS[type?.slice('urn:entity:'.length)] || 'favorite';

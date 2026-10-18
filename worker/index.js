@@ -7,6 +7,7 @@ import { handleMcp } from './mcp.js';
 import { page } from './page.js';
 import { appRoute } from './app.js';
 import { handleSocial, sessionUser, planTitle } from './social.js';
+import { tasteReport } from './taste.js';
 
 // Small stable hash (FNV-1a) for cache keys; works in Workers and Node alike.
 const fnv = (text) => { let h = 0x811c9dc5; for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); };
@@ -25,7 +26,8 @@ function cacheKey(mode, input) {
   try {
     // Plans that know where people have been are personal, so their key includes that history.
     const seen = input?.seen && Object.keys(input.seen).length ? fnv(JSON.stringify(Object.entries(input.seen).sort())) : '';
-    return [...MODES[mode].key(input), seen].join('|').toLowerCase();
+    const profiles = Array.isArray(input?.profiles) && input.profiles.some(Boolean) ? fnv(JSON.stringify(input.profiles)) : '';
+    return [...MODES[mode].key(input), seen, profiles].join('|').toLowerCase();
   } catch {
     return null;
   }
@@ -53,6 +55,7 @@ function allow(request, limit = LIMIT, bucket = 'web') {
   return true;
 }
 
+const SUGGEST_TYPES = ['movie', 'tv_show', 'artist', 'book', 'author', 'videogame', 'brand', 'person', 'destination', 'podcast'];
 const qlooOrigin = (env) => ['https://api.qloo.com', 'https://hackathon.api.qloo.com'].includes(env.QLOO_API_URL) ? env.QLOO_API_URL : ORIGIN;
 
 // Streams agent steps as they happen, then the plan: one JSON object per line.
@@ -87,7 +90,7 @@ function streamPlan(mode, input, key, origin, cached, allowed, onResult = () => 
 async function planRoute(mode, request, env) {
   if (request.method !== 'POST') return json({ error: 'Use POST.' }, 405);
   if (!env.QLOO_API_KEY) return json({ error: 'Live Qloo data is not configured yet. Try the clearly labeled sample while the key is being added.' }, 503);
-  if (Number(request.headers.get('content-length') || 0) > 3000) return json({ error: 'Request is too large.' }, 413);
+  if (Number(request.headers.get('content-length') || 0) > 8000) return json({ error: 'Request is too large.' }, 413); // room for a taste profile
   let input;
   try { input = await request.json(); } catch { return json({ error: 'Invalid JSON.' }, 400); }
   if (input && typeof input === 'object') delete input.seen; // only the server knows where someone has been
@@ -125,9 +128,21 @@ export default {
       const q = tidy(url.searchParams.get('q'), 60);
       if (q.length < 2 || !env.QLOO_API_KEY) return json({ items: [] });
       if (!allow(request, 120, 'suggest')) return json({ items: [] }, 429);
-      const k = 'suggest|' + q.toLowerCase(), hit = cache.get(k);
+      const types = (url.searchParams.get('types') || '').split(',').filter((t) => SUGGEST_TYPES.includes(t));
+      const k = 'suggest|' + types.join(',') + '|' + q.toLowerCase(), hit = cache.get(k);
       if (hit && hit.expires > Date.now()) return json({ items: hit.value });
-      try { const items = await suggest(q, env.QLOO_API_KEY, qlooOrigin(env)); remember(k, items); return json({ items }); } catch { return json({ items: [] }); }
+      try { const items = await suggest(q, env.QLOO_API_KEY, qlooOrigin(env), types); remember(k, items); return json({ items }); } catch { return json({ items: [] }); }
+    }
+    // "What do I really like?": the taste profile's shared traits and a few discoveries per domain.
+    if (url.pathname === '/api/taste' && request.method === 'POST') {
+      if (!env.QLOO_API_KEY) return json({ error: 'Live Qloo data is not configured yet.' }, 503);
+      const text = await request.text();
+      if (text.length > 6000) return json({ error: 'Invalid request.' }, 413);
+      let input; try { input = JSON.parse(text); } catch { return json({ error: 'Invalid request.' }, 400); }
+      const k = 'taste|' + fnv(JSON.stringify(input?.profile || {})), hit = cache.get(k);
+      if (hit && hit.expires > Date.now()) return json(hit.value);
+      if (!allow(request, 30, 'taste')) return json({ error: 'Too many attempts. Try again in a few minutes.' }, 429);
+      try { const report = await tasteReport(input?.profile, env.QLOO_API_KEY, qlooOrigin(env)); remember(k, report); return json(report); } catch (error) { return json({ error: error instanceof Error ? error.message : 'Request failed.' }, 422); }
     }
     if (url.pathname === '/api/plan') return planRoute('plan', request, env);
     if (url.pathname === '/api/evening') return planRoute('evening', request, env);

@@ -112,7 +112,7 @@ export function familyFriendly(category) {
 }
 
 export function parseEvening(input) {
-  const { favorites, names, picks } = readFavorites(input);
+  const { favorites, names, picks, profiles } = readFavorites(input);
   const city = tidy(input?.city, 70);
   const lat = Number(input?.lat), lon = Number(input?.lon);
   const near = Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && !(lat === 0 && lon === 0)
@@ -120,7 +120,7 @@ export function parseEvening(input) {
   if (!near && city.length < 2) throw new Error('Enter a city or use your location.');
   const start = minutesOf(input?.start) ?? 18 * 60 + 30;
   return {
-    favorites, names, picks, city, near,
+    favorites, names, picks, profiles, city, near,
     start: clock(Math.min(start, 23 * 60)),
     day: DAYS.includes(input?.day) ? input.day : null,
     cuisine: CUISINES.includes(input?.cuisine) ? input.cuisine : null,
@@ -172,7 +172,7 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
   const ck = q.near ? '' : cityKey(q.city);
   const startMin = minutesOf(q.start);
 
-  const { seeds, filmList, warning, warningKey } = await understandAll(q.favorites, key, origin, step, q.picks);
+  const { seeds, filmList, warning, warningKey } = await understandAll(q.favorites, key, origin, step, q.picks, q.profiles);
   const ids = seeds.map((s) => s.id), n = ids.length;
 
   // 1. Dinner: cuisine and mood first; the agent relaxes the mood, then the cuisine, if too little fits.

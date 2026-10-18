@@ -41,6 +41,13 @@ Two ways to use it:
   and served only to their owner and, for shared memories, to accepted friends.
 - **Account recovery without email:** sign-up shows a one-time recovery code; **Forgot password?** uses it
   to set a new password, and **Change password** is in your profile. Both sign out your other devices.
+- **Taste profile ("What do I really like?"):** instead of one favorite, name up to 3 works per section (films, series, music,
+  books, games, sports, travel, brands) and pick genres; genres alone work when you cannot remember titles. TasteBridge
+  reads the Qloo tags your favorites share (themes, feel, kind of fan, interests) and suggests films, series, artists,
+  books and destinations that fit the whole profile. Genres stand in as their best-known works (mystery books →
+  *Gone Girl*, *The Silent Patient*). Instruments and hobbies describe you but never steer places: Qloo's hobby
+  audiences proved too loose. In a plan, the profile is one person's signal, and their share follows their best-fitting
+  favorite, so naming five things does not outweigh a friend who named one.
 - **10 languages:** English, Tiếng Việt, 日本語, 한국어, 中文, ไทย, Bahasa Indonesia, Español, Français and
   Deutsch. The app follows the phone's language and has a picker in the header. The agent's steps, reasons,
   tips and errors are sent as message keys, so a finished plan switches language without asking Qloo again.
@@ -197,6 +204,8 @@ worker/social-ui.js Browser script for sign-in, profile, friends, invites, rooms
 worker/qloo.js      Qloo client: entity parsing, explainability, request queue and 429 retries
 worker/mcp.js       MCP server: tool definitions and JSON-RPC handling
 worker/page.js      The web app (single page, no build step)
+worker/taste.js     Taste profile: checked Qloo genre ids, portrait from shared tags, discoveries per domain
+worker/taste-ui.js  Browser script for the taste profile sheet
 worker/i18n*.js     Translations (page, accounts, agent messages) and the browser T() helper
 local-server.mjs    Node.js HTTP adapter that serves the worker on a normal server, with streaming
 tests/              node:test unit tests with a mocked Qloo API

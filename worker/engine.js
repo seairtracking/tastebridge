@@ -1,6 +1,7 @@
 // TasteBridge planning agent: understands two tastes through Qloo, searches for an occasion,
 // refines the search when there is not enough common ground, and ranks a fair plan for both people.
 import { ORIGIN, tidy, candidates, insights, kind } from './qloo.js';
+import { cleanProfile, profileSize, profileSeed } from './taste.js';
 
 // `fits` matches the Qloo place categories that really suit the occasion; Qloo's tag filter alone is loose
 // (a museum that also has a bar counts as a bar).
@@ -67,8 +68,10 @@ export function adultVenue(x) {
 }
 
 // Each person's share of a result in percent (summing to 100), from Qloo explainability.
+// A person with a taste profile is one signal made of several entities ("id1,id2,..."). Their share uses the
+// favorite that fits this result best, so naming five favorites neither outweighs nor dilutes a friend who named one.
 export function shareList(item, ids) {
-  const scores = ids.map((id) => item?.explain?.find((x) => x.id === id)?.score || 0);
+  const scores = ids.map((id) => Math.max(0, ...String(id).split(',').map((one) => item?.explain?.find((x) => x.id === one)?.score || 0)));
   const total = scores.reduce((t, v) => t + v, 0);
   return total > 0 ? percents(scores.map((v) => v / total)) : null;
 }
@@ -142,7 +145,9 @@ export function readFavorites(input) {
   const names = Array.isArray(input?.names) ? favorites.map((_, i) => tidy(input.names[i], 40) || null) : [];
   const UUIDISH = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const picks = Array.isArray(input?.picks) ? favorites.map((_, i) => (UUIDISH.test(String(input.picks[i] || '')) ? String(input.picks[i]).toLowerCase() : null)) : [];
-  return { favorites, names, picks };
+  // A detailed taste profile can stand in for a person's favorite (see taste.js).
+  const profiles = Array.isArray(input?.profiles) ? favorites.map((_, i) => (input.profiles[i] && typeof input.profiles[i] === 'object' ? cleanProfile(input.profiles[i]) : null)).map((p) => (p && profileSize(p) ? p : null)) : [];
+  return { favorites, names, picks, profiles };
 }
 
 export function parseInput(input) {
@@ -150,16 +155,21 @@ export function parseInput(input) {
   const city = tidy(input?.city, 70);
   const occasion = Object.hasOwn(OCCASIONS, input?.occasion) ? input.occasion : 'dinner';
   if (city.length < 2) throw new Error('Enter a city.');
-  return { favorites, names, picks: readFavorites(input).picks, first: favorites[0], second: favorites[1] || '', city, occasion };
+  const { picks, profiles } = readFavorites(input);
+  return { favorites, names, picks, profiles, first: favorites[0], second: favorites[1] || '', city, occasion };
 }
 
 // Resolves every favorite and checks that each one really shapes Qloo's results.
-export async function understandAll(favorites, key, origin, step, picks = []) {
+export async function understandAll(favorites, key, origin, step, picks = [], profiles = []) {
   const n = favorites.length;
   step('resolve', n === 1 ? 'Understanding your taste' : n === 2 ? 'Understanding both tastes' : 'Understanding everyone’s tastes',
     `Looking up ${favorites.map((f) => `“${f}”`).join(n === 2 ? ' and ' : ', ')} in Qloo’s taste graph.`,
     n === 2 && { l: M('s.resolve.l'), d: [M('s.resolve.d', { a: favorites[0], b: favorites[1] })] });
-  const pools = await Promise.all(favorites.map((f) => candidates(f, key, origin, 10)));
+  // A profile is already a precise set of works, so it is used as it is, with no other readings to fall back on.
+  const pools = await Promise.all(favorites.map(async (f, i) => {
+    const seed = profiles[i] ? await profileSeed(profiles[i], key, origin).catch(() => null) : null;
+    return seed ? [seed] : candidates(f, key, origin, 10);
+  }));
   // A reading the person picked from the suggestions goes first, if Qloo search still returns it.
   pools.forEach((pool, i) => { const j = picks[i] ? pool.findIndex((x) => x.id === picks[i]) : -1; if (j > 0) pool.unshift(...pool.splice(j, 1)); });
   const seeds = [];
@@ -246,13 +256,13 @@ export async function pickFilms(filmList, seeds, key, origin, step) {
 export const seedSummary = (seeds, names = []) => seeds.map((s, i) => ({ id: s.id, name: s.name, kind: kind(s), person: names[i] || null }));
 
 export async function plan(input, key, origin = ORIGIN, onStep = () => {}) {
-  const { favorites, names, picks, city, occasion } = parseInput(input);
+  const { favorites, names, picks, profiles, city, occasion } = parseInput(input);
   const seen = input?.seen && typeof input.seen === 'object' ? input.seen : {};
   const occ = OCCASIONS[occasion];
   const steps = [];
   const step = (id, label, detail, t) => { const s = { id, label, detail, ...(t ? { t } : {}) }; steps.push(s); onStep(s); };
 
-  const { seeds, filmList, warning, warningKey } = await understandAll(favorites, key, origin, step, picks);
+  const { seeds, filmList, warning, warningKey } = await understandAll(favorites, key, origin, step, picks, profiles);
   const n = seeds.length, ids = seeds.map((s) => s.id);
 
   // A good pick is in the city and is mainly the kind of place the occasion calls for.

@@ -555,8 +555,11 @@ test("every language has every message, with the same placeholders as English", 
   const { PAGE } = await import("../worker/i18n-page.js");
   const { SOCIAL } = await import("../worker/i18n-social.js");
   const { MSG } = await import("../worker/i18n-msg.js");
+  const { TASTE } = await import("../worker/i18n-taste.js");
+  const { LABELS } = await import("../worker/taste-ui.js");
+  for (const l of Object.values(LABELS)) assert.ok(TASTE[l], `missing chip label ${l}`);
   const holes = (s) => (s.match(/\{\w+(?:\|\w+)?\}/g) || []).sort().join();
-  for (const [k, v] of Object.entries({ ...PAGE, ...SOCIAL })) {
+  for (const [k, v] of Object.entries({ ...PAGE, ...SOCIAL, ...TASTE })) {
     assert.equal(v.length, 9, k);
     for (const t of v) assert.equal(holes(t), holes(k), `${k} → ${t}`);
   }
@@ -567,8 +570,8 @@ test("every language has every message, with the same placeholders as English", 
   const fs = await import("node:fs");
   const used = ["engine.js", "evening.js"].flatMap((f) => [...fs.readFileSync(new URL(`../worker/${f}`, import.meta.url), "utf8").matchAll(/M\('([\w.-]+)'/g)].map((m) => m[1]));
   for (const k of used) assert.ok(MSG[k], `missing message ${k}`);
-  const client = ["page.js", "social-ui.js"].flatMap((f) => [...fs.readFileSync(new URL(`../worker/${f}`, import.meta.url), "utf8").matchAll(/T\((?:'([^']+)'|"([^"]+)")/g)].map((m) => m[1] || m[2]));
-  for (const k of client) if (!/\.$/.test(k)) assert.ok(PAGE[k] || SOCIAL[k] || MSG[k], `missing text ${k}`);
+  const client = ["page.js", "social-ui.js", "taste-ui.js"].flatMap((f) => [...fs.readFileSync(new URL(`../worker/${f}`, import.meta.url), "utf8").matchAll(/T\((?:'([^']+)'|"([^"]+)")/g)].map((m) => m[1] || m[2]));
+  for (const k of client) if (!/\.$/.test(k)) assert.ok(PAGE[k] || SOCIAL[k] || TASTE[k] || MSG[k], `missing text ${k}`);
 });
 
 test("the browser T() fills templates, translates references and falls back to English", async () => {
@@ -591,4 +594,45 @@ test("the browser T() fills templates, translates references and falls back to E
   assert.equal(run(["in-ID"]).tbLang, "id");
   assert.equal(run(["pt-BR"]).tbLang, "en");
   assert.equal(run(["ja"]).T("Sign in"), "ログイン");
+});
+
+test("a taste profile keeps only known genres and real ids, and counts as one person's signal", async () => {
+  const { cleanProfile, profileSeed, tasteReport } = await import("../worker/taste.js");
+  const { shareList } = await import("../worker/engine.js");
+  const p = cleanProfile({
+    sections: {
+      film: { picks: [{ id: id(1), name: "Spirited Away", kind: "film" }, { id: "nope", name: "x" }], genres: ["urn:tag:genre:media:mystery", "urn:tag:genre:media:evil"] },
+      book: { genres: ["urn:tag:genre:media:mystery"] },
+      game: { genres: ["urn:tag:genre:media:mystery"] },
+    },
+    hobbies: ["urn:audience:leisure:coffee", "urn:audience:leisure:hacking"], instruments: ["urn:tag:instrument:qloo:guitar"],
+  });
+  assert.deepEqual(p.sections.film, { picks: [{ id: id(1), name: "Spirited Away", kind: "film" }], genres: ["urn:tag:genre:media:mystery"] });
+  assert.deepEqual(p.sections.book.genres, ["urn:tag:genre:media:mystery"]);
+  assert.equal(p.sections.game, undefined); // games have no genre filter
+  assert.deepEqual(p.hobbies, ["urn:audience:leisure:coffee"]);
+  // a profile person's share follows their best-fitting entity, so more favorites do not mean more weight
+  const scored = { explain: [{ id: id(1), score: 0.3 }, { id: id(2), score: 0.3 }, { id: id(3), score: 0.4 }] };
+  assert.deepEqual(shareList(scored, [`${id(1)},${id(2)}`, id(3)]), [43, 57]);
+  assert.deepEqual(shareList({ explain: [{ id: id(1), score: 0.5 }, { id: id(2), score: 0.1 }, { id: id(3), score: 0.5 }] }, [`${id(1)},${id(2)}`, id(3)]), [50, 50]);
+
+  const realFetch = globalThis.fetch, calls = [];
+  globalThis.fetch = async (url) => {
+    const u = new URL(url); calls.push(u.pathname + "?" + u.searchParams.toString());
+    if (u.pathname === "/entities") return Response.json({ results: [{ entity_id: id(1), name: "Spirited Away", types: ["urn:entity:movie"], tags: [{ tag_id: "urn:tag:theme:qloo:coming_of_age", name: "Coming of age" }, { tag_id: "urn:tag:style:qloo:whimsical", name: "Whimsical" }] }] });
+    const type = u.searchParams.get("filter.type");
+    if (u.searchParams.get("filter.tags")) return Response.json({ results: { entities: [item(type === "urn:entity:book" ? 40 : 41, type === "urn:entity:book" ? "Gone Girl" : "Seven")] } });
+    return Response.json({ results: { entities: [item(50, "Howl's Moving Castle", { types: [type] })] } });
+  };
+  try {
+    const seed = await profileSeed(p, "k");
+    assert.equal(seed.id, [id(1), id(41), id(40)].join(","));
+    assert.equal(seed.name, "Spirited Away");
+    const report = await tasteReport(p, "k");
+    assert.deepEqual(report.portrait.themes, [{ name: "Coming of age", from: ["Spirited Away"] }]);
+    assert.equal(report.discover.film[0].name, "Howl's Moving Castle");
+    assert.ok(calls.some((c) => c.includes("filter.exclude.entities=" + id(1))));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

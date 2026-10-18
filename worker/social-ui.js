@@ -17,7 +17,7 @@ function day(t){try{return new Date(t).toLocaleDateString(window.tbLang||undefin
 function mins(n){return n>=60?T("{h} h {m} min",{h:Math.floor(n/60),m:n%60}):T("{min} min",{min:n})}
 
 // ---------- header + profile defaults ----------
-function refreshAccount(){return api('/api/account').then(function(d){me=d.user;friends=d.friends||[];el('accountBtn').textContent=me?me.display+' ▾':T('Sign in');el('memoriesBtn').hidden=!me;if(me){el('firstLabel').textContent=T("You ({name}) love",{name:me.display});if(!el('first').value&&me.favorite)el('first').value=me.favorite;if(!el('city').value&&me.city)el('city').value=me.city;if(me.cuisine&&!el('cuisine').value)el('cuisine').value=me.cuisine}else el('firstLabel').textContent=T('You love');return d}).catch(function(){el('accountBtn').hidden=true;return{}})}
+function refreshAccount(){return api('/api/account').then(function(d){me=d.user;window.tbMe=me;document.dispatchEvent(new Event('tb:account'));friends=d.friends||[];el('accountBtn').textContent=me?me.display+' ▾':T('Sign in');el('memoriesBtn').hidden=!me;if(me){el('firstLabel').textContent=T("You ({name}) love",{name:me.display});if(!el('first').value&&me.favorite)el('first').value=me.favorite;if(!el('city').value&&me.city)el('city').value=me.city;if(me.cuisine&&!el('cuisine').value)el('cuisine').value=me.cuisine}else el('firstLabel').textContent=T('You love');return d}).catch(function(){el('accountBtn').hidden=true;return{}})}
 
 // ---------- account sheet ----------
 function sheet(build){dialog.classList.remove('wide');dialog.replaceChildren();var box=text('div','in');build(box);dialog.append(box);if(!dialog.open)dialog.showModal()}

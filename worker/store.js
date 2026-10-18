@@ -153,6 +153,7 @@ export function openStore(path, now = () => Date.now(), { photosDir = path === '
   db.exec(SCHEMA);
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'recovery')) db.exec('ALTER TABLE users ADD COLUMN recovery TEXT');
   if (!db.prepare('PRAGMA table_info(members)').all().some((c) => c.name === 'pick')) db.exec('ALTER TABLE members ADD COLUMN pick TEXT');
+  if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'taste')) db.exec('ALTER TABLE users ADD COLUMN taste TEXT');
   const visitCols = db.prepare('PRAGMA table_info(visits)').all().map((c) => c.name);
   for (const [col, type] of [['minutes', 'INTEGER'], ['lat', 'REAL'], ['lon', 'REAL'], ['note', "TEXT NOT NULL DEFAULT ''"], ['photo', 'TEXT'], ['shared', 'INTEGER NOT NULL DEFAULT 0']]) {
     if (!visitCols.includes(col)) db.exec(`ALTER TABLE visits ADD COLUMN ${col} ${type}`);
@@ -161,7 +162,8 @@ export function openStore(path, now = () => Date.now(), { photosDir = path === '
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
   const pair = (x, y) => (x < y ? [x, y] : [y, x]);
-  const publicUser = (u) => u && { id: u.id, username: u.username, display: u.display, favorite: u.favorite, city: u.city, cuisine: u.cuisine, mood: u.mood };
+  const parse = (text) => { try { return text ? JSON.parse(text) : null; } catch { return null; } };
+  const publicUser = (u) => u && { id: u.id, username: u.username, display: u.display, favorite: u.favorite, city: u.city, cuisine: u.cuisine, mood: u.mood, taste: parse(u.taste) };
 
   const sweep = () => {
     run('DELETE FROM sessions WHERE expires < ?', now());
@@ -220,6 +222,11 @@ export function openStore(path, now = () => Date.now(), { photosDir = path === '
     endSession(t) { if (t) run('DELETE FROM sessions WHERE hash = ?', hash(t)); },
     updateProfile(userId, { display, favorite, city, cuisine, mood }) {
       run('UPDATE users SET display = ?, favorite = ?, city = ?, cuisine = ?, mood = ? WHERE id = ?', display, favorite, city, cuisine, mood, userId);
+      return publicUser(one('SELECT * FROM users WHERE id = ?', userId));
+    },
+    // The detailed taste profile, already cleaned by taste.js (known ids and short names only).
+    setTaste(userId, taste) {
+      run('UPDATE users SET taste = ? WHERE id = ?', taste ? JSON.stringify(taste) : null, userId);
       return publicUser(one('SELECT * FROM users WHERE id = ?', userId));
     },
     checkUserPassword(userId, password) {

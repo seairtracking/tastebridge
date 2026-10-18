@@ -4,6 +4,7 @@
 import { PAGE } from './i18n-page.js';
 import { SOCIAL } from './i18n-social.js';
 import { MSG } from './i18n-msg.js';
+import { TASTE } from './i18n-taste.js';
 
 export const LANGS = [
   ['en', 'English'], ['vi', 'Tiếng Việt'], ['ja', '日本語'], ['ko', '한국어'], ['zh', '中文'],
@@ -38,4 +39,4 @@ function setLang(code){if(CODES.indexOf(code)<0||code===lang)return;lang=code;wi
 window.T=T;window.tbLang=lang;window.tbLangs=LANGS;window.tbSetLang=setLang;
 apply();picker();`;
 
-export const i18nScript = `(function(){'use strict';var TEXT=${JSON.stringify({ ...PAGE, ...SOCIAL })},MSG=${JSON.stringify(MSG)},LANGS=${JSON.stringify(LANGS)};${client}})();`;
+export const i18nScript = `(function(){'use strict';var TEXT=${JSON.stringify({ ...PAGE, ...SOCIAL, ...TASTE })},MSG=${JSON.stringify(MSG)},LANGS=${JSON.stringify(LANGS)};${client}})();`;
