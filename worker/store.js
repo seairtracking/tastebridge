@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS visits (
   with_name TEXT NOT NULL DEFAULT '',
   rating INTEGER NOT NULL DEFAULT 0 CHECK (rating IN (-1, 0, 1)),
   visited INTEGER NOT NULL,
+  minutes INTEGER,
   UNIQUE (user_id, place_id)
 );
 CREATE TABLE IF NOT EXISTS saved_plans (
@@ -119,6 +120,7 @@ export function openStore(path, now = () => Date.now()) {
   const db = new DatabaseSync(path);
   db.exec(SCHEMA);
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'recovery')) db.exec('ALTER TABLE users ADD COLUMN recovery TEXT');
+  if (!db.prepare('PRAGMA table_info(visits)').all().some((c) => c.name === 'minutes')) db.exec('ALTER TABLE visits ADD COLUMN minutes INTEGER');
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
@@ -200,15 +202,17 @@ export function openStore(path, now = () => Date.now()) {
     userByName(username) { return publicUser(one('SELECT * FROM users WHERE username = ?', username)); },
 
     // ---- places you have been, and plans you made ----
-    addVisit(userId, place, withName = '') {
-      run(`INSERT INTO visits (user_id, place_id, name, address, category, image, map, with_name, visited) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (user_id, place_id) DO UPDATE SET visited = excluded.visited, with_name = excluded.with_name`,
-        userId, place.id, place.name, place.address || '', place.category || '', place.image || null, place.map || null, withName, now());
+    // `minutes` (how long you stayed) is filled in later when the app noticed you leaving.
+    addVisit(userId, place, withName = '', minutes = null) {
+      run(`INSERT INTO visits (user_id, place_id, name, address, category, image, map, with_name, visited, minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (user_id, place_id) DO UPDATE SET visited = CASE WHEN excluded.minutes IS NULL THEN excluded.visited ELSE visits.visited END,
+          with_name = CASE WHEN excluded.with_name != '' THEN excluded.with_name ELSE visits.with_name END, minutes = COALESCE(excluded.minutes, visits.minutes)`,
+        userId, place.id, place.name, place.address || '', place.category || '', place.image || null, place.map || null, withName, now(), minutes);
     },
     rateVisit(userId, visitId, rating) { return run('UPDATE visits SET rating = ? WHERE id = ? AND user_id = ?', rating, visitId, userId).changes > 0; },
     removeVisit(userId, visitId) { return run('DELETE FROM visits WHERE id = ? AND user_id = ?', visitId, userId).changes > 0; },
     visitsOf(userId, limit = 100) {
-      return all('SELECT id, place_id AS placeId, name, address, category, image, map, with_name AS withName, rating, visited FROM visits WHERE user_id = ? ORDER BY visited DESC LIMIT ?', userId, limit);
+      return all('SELECT id, place_id AS placeId, name, address, category, image, map, with_name AS withName, rating, visited, minutes FROM visits WHERE user_id = ? ORDER BY visited DESC LIMIT ?', userId, limit);
     },
     // Place ids the agent should treat as "been there" (1) or "not for us" (-1) for these people.
     seenBy(userIds) {

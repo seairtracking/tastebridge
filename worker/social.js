@@ -142,7 +142,8 @@ export async function handleSocial(request, env, { allow, runPlan }) {
     if (action === 'visits' && request.method === 'POST') {
       const place = cleanPlace(body.place);
       if (!place) return fail('Unknown place.');
-      store.addVisit(me.id, place, tidy(body.with, 40));
+      const minutes = Number(body.minutes);
+      store.addVisit(me.id, place, tidy(body.with, 40), Number.isInteger(minutes) && minutes > 0 && minutes <= 720 ? minutes : null);
       return json({ ok: true });
     }
     if (action === 'visits/rate' && request.method === 'POST') {

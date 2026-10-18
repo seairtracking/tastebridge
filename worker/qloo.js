@@ -40,6 +40,9 @@ export function entity(item) {
     ambience: tagNames(tags, 'urn:tag:ambience:qloo:'),
     cuisines: tagNames(tags, 'urn:tag:genre:place:restaurant:'),
     goodFor: tagNames(tags, 'urn:tag:good_for:qloo:'),
+    // Rooftops, terraces and gardens matter when it rains.
+    // Only places that are mainly outdoors count; having a few outdoor seats does not.
+    outdoor: tags.some((t) => /rooftop|terrace|beer_garden|open_air/.test(t)) || /rooftop|terrace|sky ?bar|beer garden|open.air/i.test(name || ''),
     liveMusic: p.live_music === true || p.live_music === 'true',
     hours: p.hours && typeof p.hours === 'object' ? p.hours : null,
   };

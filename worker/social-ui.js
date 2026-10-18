@@ -60,8 +60,11 @@ function profileSheet(){refreshAccount().then(function(d){if(!me)return authShee
   (d.rooms||[]).forEach(function(r){var li=text('li');li.append(text('span',null,(r.other?'With '+r.other:'Waiting for your friend')+(r.planned?' · planned':'')),btn('Open','vote',function(){location.href='/r/'+r.id}));pl.append(li)});
   if(!pl.childNodes.length)pl.append(text('li','muted','Plans you make on two phones appear here for 48 hours.'));ps.append(pl);box.append(ps);
   // places you've been
-  var vs=text('section');vs.append(text('h4',null,'Places you’ve been'),text('p','muted','Tap “Been here ✓” on a plan, or answer “How was it?” after a night out. TasteBridge then suggests somewhere new first and never suggests places you marked 👎 again.'));var vl=text('ul','list');
-  (d.visits||[]).forEach(function(v){var li=text('li');var info=text('span',null,v.name);info.append(text('span','muted',' · '+new Date(v.visited).toLocaleDateString()+(v.withName?' · with '+v.withName:'')));li.append(info);var act=text('span');
+  var vs=text('section');var nt=document.createElement('label');nt.style.cssText='display:flex;gap:10px;align-items:flex-start;text-transform:none;letter-spacing:0;font-size:14px;color:var(--dark);font-weight:600';var cb=document.createElement('input');cb.type='checkbox';cb.style.cssText='width:auto;margin-top:3px';cb.checked=noticer.on;
+  cb.addEventListener('change',function(){noticer.on=cb.checked;store.set('tb-notice',cb.checked?'1':'0');cb.checked?startNotice():stopNotice()});
+  nt.append(cb,text('span',null,'Notice where I go. While TasteBridge is open, it asks “Are you at …?” when you are at a place from your plan, and notes how long you stay. Your location stays on this phone; only the place you confirm is saved.'));vs.append(nt);
+  vs.append(text('h4',null,'Places you’ve been'),text('p','muted','Tap “Been here ✓” on a plan, or answer “How was it?” after a night out. TasteBridge then suggests somewhere new first and never suggests places you marked 👎 again.'));var vl=text('ul','list');
+  (d.visits||[]).forEach(function(v){var li=text('li');var info=text('span',null,v.name);info.append(text('span','muted',' · '+new Date(v.visited).toLocaleDateString()+(v.withName?' · with '+v.withName:'')+(v.minutes?' · '+(v.minutes>=60?Math.floor(v.minutes/60)+' h '+(v.minutes%60)+' min':v.minutes+' min'):'')));li.append(info);var act=text('span');
     [[1,'❤️'],[-1,'👎']].forEach(function(o){var b=btn(o[1],'vote',function(){api('/api/account/visits/rate',{method:'POST',body:{id:v.id,rating:v.rating===o[0]?0:o[0]}}).then(profileSheet)});b.setAttribute('aria-pressed',String(v.rating===o[0]));b.setAttribute('aria-label',o[0]>0?'Loved it':'Not for us');act.append(b)});
     act.append(btn('✕','vote',function(){api('/api/account/visits/remove',{method:'POST',body:{id:v.id}}).then(profileSheet)}));li.append(act);vl.append(li)});
   if(!(d.visits||[]).length)vl.append(text('li','muted','Nothing yet.'));vs.append(vl);box.append(vs);
@@ -116,7 +119,7 @@ function decorateVotes(v){document.querySelectorAll('#results [data-option]').fo
   [[1,'👍 '+t.up],[-1,'👎 '+t.down]].forEach(function(o){var b=btn(o[1],'vote',function(){api('/api/rooms/'+roomId+'/vote',{method:'POST',body:{option:id,value:t.mine===o[0]?0:o[0]}}).then(load)});b.setAttribute('aria-pressed',String(t.mine===o[0]));b.setAttribute('aria-label',(o[0]>0?'Like ':'Dislike ')+'this option');row.append(b)});card.append(row)})}
 
 var lastPlan=null,pageShow=window.show;
-window.show=function(plan){pageShow(plan);lastPlan=plan;decorateBeen(plan)};
+window.show=function(plan){pageShow(plan);lastPlan=plan;decorateBeen(plan);startNotice()};
 function placeOf(plan,id){var all=(plan.places||[]).concat((plan.stops||[]).reduce(function(a,s){return a.concat(s.options)},[]));for(var i=0;i<all.length;i++)if(all[i].id===id)return all[i];return null}
 function decorateBeen(plan){if(!me)return;document.querySelectorAll('#places [data-option]').forEach(function(card){var place=placeOf(plan,card.dataset.option);if(!place||card.querySelector('.been'))return;var b=btn(place.been?'Been here ✓':'Been here?','vote been',function(){var withName=(plan.seeds||[]).map(function(x){return x.person}).filter(function(n){return n&&n!==me.display}).join(', ');api('/api/account/visits',{method:'POST',body:{place:place,with:withName}}).then(function(){b.textContent='Been here ✓';b.setAttribute('aria-pressed','true')})});b.setAttribute('aria-pressed',String(!!place.been));b.style.marginTop='8px';card.append(b)})}
 function reviewBox(r){var box=el('review');if(!box){box=text('div','room');box.id='review';roomBox.parentNode.insertBefore(box,roomBox)}box.hidden=false;box.replaceChildren();
@@ -126,7 +129,19 @@ function reviewBox(r){var box=el('review');if(!box){box=text('div','room');box.i
   var act=text('div','row');act.append(btn('Save','btn primary',function(){send(Object.keys(picked).filter(function(k){return picked[k]}).map(function(k){return{id:k}}))}),btn('We didn’t go','btn',function(){send([])}));box.append(act);
   function send(went){api('/api/account/review',{method:'POST',body:{id:r.id,went:went}}).then(function(){box.replaceChildren(text('p',null,went.length?'Saved. Thanks!':'Okay, noted.'));setTimeout(function(){box.hidden=true},2500)})}}
 
+// ---------- opt-in "Notice where I go" (only while the app is open) ----------
+var noticer={on:store.get('tb-notice')==='1',watch:null,near:{},asked:{},here:null,plan:null};
+function targets(){var plan=lastPlan||noticer.plan;if(!plan)return[];return(plan.places||[]).concat((plan.stops||[]).reduce(function(a,s){return a.concat(s.options)},[])).filter(function(o){return o.lat!=null})}
+function startNotice(){if(!me||!noticer.on||!navigator.geolocation||noticer.watch!=null||document.hidden)return;noticer.watch=navigator.geolocation.watchPosition(onPosition,function(){},{enableHighAccuracy:true,maximumAge:60000,timeout:20000})}
+function stopNotice(){if(noticer.watch!=null){navigator.geolocation.clearWatch(noticer.watch);noticer.watch=null}}
+document.addEventListener('visibilitychange',function(){document.hidden?stopNotice():startNotice()});
+function onPosition(p){var at={lat:p.coords.latitude,lon:p.coords.longitude},now=Date.now();
+  if(noticer.here&&dist(at,noticer.here.place)>150){var mins=Math.round((now-noticer.here.since)/60000);var place=noticer.here.place;noticer.here=null;if(mins>=5)api('/api/account/visits',{method:'POST',body:{place:place,minutes:Math.min(mins,720)}}).catch(function(){})}
+  targets().forEach(function(t){var d=dist(at,t);if(d<=80){noticer.near[t.id]=noticer.near[t.id]||now;if(now-noticer.near[t.id]>=180000&&!noticer.asked[t.id]){noticer.asked[t.id]=1;askHere(t,noticer.near[t.id])}}else if(!noticer.here||noticer.here.place.id!==t.id)delete noticer.near[t.id]})}
+function askHere(t,since){var box=el('checkin');if(!box){box=text('div','room');box.id='checkin';roomBox.parentNode.insertBefore(box,roomBox)}box.hidden=false;box.replaceChildren(text('div','step','Noticed nearby'),text('h3',null,'Are you at '+t.name+'?'));
+  var row=text('div','row');row.append(btn('Yes, we’re here','btn primary',function(){var withName=((lastPlan||noticer.plan).seeds||[]).map(function(x){return x.person}).filter(function(n){return n&&n!==me.display}).join(', ');api('/api/account/visits',{method:'POST',body:{place:t,with:withName}}).then(function(){noticer.here={place:t,since:since};box.replaceChildren(text('p',null,'Saved to Places you’ve been ✓ While the app is open, TasteBridge also notes how long you stay.'));setTimeout(function(){box.hidden=true},4000)})}),btn('No','btn',function(){box.hidden=true}));box.append(row);box.scrollIntoView({behavior:'smooth',block:'start'})}
+
 var m=/^\/r\/([a-z0-9]{6,16})$/.exec(location.pathname);
-refreshAccount().then(function(d){if(m)openRoom(m[1]);else if(d&&d.review)reviewBox(d.review)});
+refreshAccount().then(function(d){if(m)openRoom(m[1]);else if(d&&d.review)reviewBox(d.review);var recent=d&&d.plans&&d.plans[0];if(me&&noticer.on&&recent&&Date.now()-recent.created<12*3600000)api('/api/account/plans/'+recent.id).then(function(r){noticer.plan=r.plan;startNotice()});else startNotice()});
 window.addEventListener('popstate',function(){var x=/^\/r\/([a-z0-9]{6,16})$/.exec(location.pathname);if(x)openRoom(x[1]);else{clearInterval(poll);roomBox.hidden=true;hideForm(false)}});
 })();`;

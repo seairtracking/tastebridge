@@ -23,6 +23,14 @@ Two ways to use it:
 - **Optional accounts:** keep your favorite, city and usual food and mood in a profile, add friends by
   username (they must accept), and plan with a friend in one tap: their profile fills their side, and
   the plan shows up on their phone too. Everything still works without an account.
+- **Map, directions and weather:** Tonight's plan shows the stops on a map (OpenStreetMap data, tiles from
+  openstreetmap.de) with a walking-directions link through all of them, starting from you when you shared
+  your location. The agent checks the hourly forecast (Open-Meteo, no key) at the dinner spot: when rain
+  is likely it keeps the next stops a short walk away and prefers indoor places over rooftops and
+  terraces; on a dry, mild evening it favours them.
+- **Notice where I go (opt-in):** while the app is open, it can ask "Are you at …?" when you are at a place
+  from your plan and note how long you stay. Location is compared on the phone; only the place you
+  confirm is saved. Background tracking would need a native app and is not done.
 - **Places you've been:** tap **Been here ✓** on a place, or answer **How was it?** the next time you open
   the app after a plan. Your history (with date, who you went with, ❤️ or 👎) shapes the next plan: places
   you have been are marked and move down so somewhere new comes first, and places you rated 👎 are never

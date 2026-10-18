@@ -34,6 +34,31 @@ const AFTER_FITS = /bar$|bar_|pub|lounge|wine|cocktail|speakeasy|dessert|cafe|co
 const SHOW_FITS = /music|jazz|comedy|club|theater|theatre|concert|cabaret|karaoke|opera|performing/;
 const SHOW_TAGS = ['live_music_venue', 'live_music_bar', 'jazz_club', 'comedy_club', 'night_club'].map((t) => 'urn:tag:category:place:' + t).join(',');
 
+// Weather from Open-Meteo (free, no key) at the dinner spot for each stop's hour, in local time.
+// Only the next few days are forecast; anything else, or any failure, simply means no weather.
+const SKY = [[0, '☀️', 'clear'], [3, '⛅', 'cloudy'], [48, '🌫️', 'fog'], [67, '🌧️', 'rain'], [77, '❄️', 'snow'], [82, '🌦️', 'showers'], [99, '⛈️', 'thunderstorms']];
+export async function forecast(point, day, times) {
+  if (point?.lat == null) return null;
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${point.lat}&longitude=${point.lon}&hourly=temperature_2m,precipitation_probability,weather_code&timezone=auto&forecast_days=7`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const h = (await res.json())?.hourly;
+    if (!Array.isArray(h?.time)) return null;
+    const dates = [...new Set(h.time.map((t) => t.slice(0, 10)))];
+    const date = day ? dates.find((d) => DAYS[new Date(d + 'T12:00:00Z').getUTCDay()] === day) : dates[0];
+    if (!date) return null;
+    return times.map((time) => {
+      const i = h.time.indexOf(`${date}T${time.slice(0, 2)}:00`);
+      if (i < 0) return null;
+      const code = Number(h.weather_code[i]), sky = SKY.find(([max]) => code <= max) || SKY.at(-1);
+      return { time, date, temp: Math.round(h.temperature_2m[i]), rain: Number(h.precipitation_probability[i]) || 0, icon: sky[1], sky: sky[2] };
+    });
+  } catch {
+    return null;
+  }
+}
+
 // Distance in metres between two points (haversine) and the walk it takes at about 80 m a minute.
 export function metres(p, q) {
   if (p?.lat == null || q?.lat == null) return null;
@@ -183,16 +208,31 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
 
   // 2. A second stop within walking distance of dinner, ranked by fairness and closeness.
   const afterTime = clock(startMin + 105);
+  const showTime = clock(startMin + 180);
+  const weather = anchor ? await forecast(anchor, q.day, [q.start, afterTime, showTime]) : null;
+  const later = (weather || []).slice(1).filter(Boolean);
+  const wet = later.some((w) => w.rain >= 50), extreme = later.some((w) => w.temp >= 33 || w.temp <= 7);
+  const nice = later.length > 0 && !wet && !extreme && later.every((w) => w.rain < 20 && w.temp >= 18 && w.temp <= 30);
+  if (later.length) {
+    const w = later[0];
+    step('weather', 'Checking the weather', `${w.icon} ${w.temp}°C with a ${w.rain}% chance of rain around ${w.time} near ${pick.name} (Open-Meteo).`);
+    if (wet) step('refine', 'Rain is likely', 'Rain is likely later, so the agent keeps the next stops within a short walk and prefers indoor places over rooftops and terraces.');
+    else if (extreme) step('refine', `It will be ${later[0].temp >= 33 ? 'hot' : 'cold'}`, 'The agent keeps the walks short and prefers indoor places.');
+    else if (nice) step('refine', 'A nice evening', 'Dry and mild, so rooftops, terraces and gardens get a boost.');
+  }
+  const walkScale = wet || extreme ? 300 : 500;
+  const skyFactor = (x) => (!x.outdoor ? 1 : wet ? 0.45 : extreme ? 0.7 : nice ? 1.25 : 1);
   const afterTag = sp ? AFTER_TAGS[sp.after] : q.mood === 'cozy' || q.mood === 'quiet' ? AFTER_TAGS.dessert : AFTER_TAGS.bar;
   const nearBoost = (time, mood) => (x) => {
     const m = metres(anchor, x);
-    let f = m == null ? 0.6 : 1 / (1 + m / 500); // a second stop should be a short walk
+    let f = m == null ? 0.6 : 1 / (1 + m / walkScale); // a second stop should be a short walk, shorter in the rain
+    f *= skyFactor(x);
     if (mood && x.ambience?.includes(mood)) f *= 1.25;
     f *= occasionBoost(x, sp);
     if (q.budget && x.price && x.price > q.budget) f *= 0.4;
     return f * (openAt(x.hours, q.day, time) === 'closed' ? 0.2 : 1);
   };
-  const nearExtra = (time) => (x) => ({ open: openAt(x.hours, q.day, time), walk: walk(metres(anchor, x)), liveMusic: !!x.liveMusic, lat: x.lat, lon: x.lon });
+  const nearExtra = (time) => (x) => ({ open: openAt(x.hours, q.day, time), walk: walk(metres(anchor, x)), liveMusic: !!x.liveMusic, outdoor: !!x.outdoor, lat: x.lat, lon: x.lon });
   const taken = new Set([pick.id]);
   step('after', 'Finding a second stop nearby', `Looking for ${q.mood === 'cozy' || q.mood === 'quiet' ? 'dessert, cafés or quiet bars' : 'bars'} within a short walk of ${pick.name}.`);
   const after = anchor ? await search('second stop', [
@@ -203,7 +243,6 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
   afterList.slice(0, 3).forEach((p) => taken.add(p.id)); // the show list should offer different places
 
   // 3. Live music or a show nearby. Qloo has no event listings, so venues link to their own programme.
-  const showTime = clock(startMin + 180);
   step('show', 'Looking for live music or a show', `Searching music venues, jazz and comedy clubs near ${pick.name}. Qloo has no event listings, so each venue links to its own programme.`);
   // Real stages first (live music, jazz, comedy, theatre); dance clubs rank lower on a romantic, cozy or quiet night.
   const calm = ['romantic', 'cozy', 'quiet'].includes(q.mood) || !!sp?.family;
@@ -211,7 +250,7 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
     const main = x.categories?.[0] || '';
     const stage = /music|jazz|comedy|concert|theat|opera|cabaret|performing/.test(main);
     const m = metres(anchor, x);
-    const close = m == null ? 0.6 : 1 / (1 + m / 600); // after dinner, a show should be a short walk or ride away
+    const close = (m == null ? 0.6 : 1 / (1 + m / (walkScale + 100))) * skyFactor(x); // a short walk or ride away
     const open = openAt(x.hours, q.day, showTime) === 'closed' ? 0.2 : 1;
     return close * open * (x.liveMusic ? 1.3 : 1) * (stage ? 1.3 : calm ? 0.6 : 0.9);
   };
@@ -234,6 +273,7 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
   return {
     mode: 'evening', source: 'qloo-live', city: area, start: q.start, day: q.day, cuisine: q.cuisine, mood: q.mood, budget: q.budget,
     special: q.special, specialLabel: sp?.label || null, tip: sp?.tip || null,
+    weather: weather && weather.some(Boolean) ? weather : null,
     occasionLabel: 'Tonight', people: n, seeds: seedSummary(seeds, q.names),
     stops, films, filmNote, warning, steps,
     method: 'TasteBridge resolves each favorite with Qloo Search and checks their signal, then plans the evening stop by stop with Qloo Insights: dinner filtered by cuisine and mood, a second stop and a live music or show venue searched around the dinner spot. Every stop is ranked with the fairness-weighted rule and Qloo explainability, adjusted for mood, cuisine, budget, walking distance and opening hours where Qloo has them. Qloo does not list events, so check each venue for tonight’s programme.',

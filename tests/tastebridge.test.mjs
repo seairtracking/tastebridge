@@ -246,7 +246,7 @@ test("parseEvening validates choices and keeps location coarse", () => {
   assert.throws(() => parseEvening({ first: "Lady Gaga", second: "Stranger Things" }), /city or use your location/);
 });
 
-function fakeEveningQloo() {
+function fakeEveningQloo(rain = 80) {
   const reply = (body) => new Response(JSON.stringify(body));
   const place = (n, name, cats, extra, lat, lon, x, y) => item(n, name, {
     location: { lat, lon },
@@ -256,6 +256,11 @@ function fakeEveningQloo() {
   });
   return async (url) => {
     const u = new URL(String(url)), q = (k) => u.searchParams.get(k);
+    if (u.hostname === "api.open-meteo.com") {
+      if (rain == null) return new Response("down", { status: 503 });
+      const time = Array.from({ length: 24 }, (_, h) => `2026-10-23T${String(h).padStart(2, "0")}:00`); // a Friday
+      return reply({ hourly: { time, temperature_2m: time.map(() => 24), precipitation_probability: time.map(() => rain), weather_code: time.map(() => (rain >= 50 ? 63 : 0)) } });
+    }
     if (u.pathname === "/search") return reply({ results: [item(q("query") === "Spirited Away" ? 1 : 2, q("query"), { types: [q("query") === "Spirited Away" ? "urn:entity:movie" : "urn:entity:artist"] })] });
     const [x, y] = q("signal.interests.entities").split(",");
     if (q("filter.type") === "urn:entity:movie") return reply({ results: { entities: [explained(60, "Inception", 0.5, 0.5)] } });
@@ -269,6 +274,7 @@ function fakeEveningQloo() {
       place(90, "Jazz Room", ["urn:tag:category:place:jazz_club"], { live_music: true }, 40.7600, -73.9870, x, y),
     ] } });
     return reply({ results: { entities: [
+      place(79, "Sky Rooftop", ["urn:tag:category:place:rooftop_bar", "urn:tag:amenity:qloo:rooftop"], {}, 40.7571, -73.9865, x, y),
       place(80, "Wine Bar", ["urn:tag:category:place:wine_bar"], {}, 40.7575, -73.9860, x, y),
       place(81, "Far Pub", ["urn:tag:category:place:pub"], {}, 40.7700, -73.9700, x, y),
     ] } });
@@ -285,7 +291,9 @@ test("evening plans dinner by cuisine and mood, then a nearby stop, a show and a
     assert.equal(p.stops[0].options[0].name, "Sushi Place"); // matches cuisine and mood
     assert.equal(p.stops[0].options[0].moodMatch, true);
     assert.equal(p.stops[1].time, "20:15");
-    assert.equal(p.stops[1].options[0].name, "Wine Bar"); // the closer stop wins
+    assert.equal(p.stops[1].options[0].name, "Wine Bar"); // rain: the indoor bar beats the closer rooftop
+    assert.equal(p.weather[1].rain, 80);
+    assert.ok(p.steps.some((s) => s.label === "Rain is likely"));
     assert.ok(p.stops[1].options[0].walk.minutes <= 2);
     assert.equal(p.stops[2].options[0].name, "Jazz Room");
     assert.equal(p.stops[2].options[0].liveMusic, true);
@@ -456,4 +464,33 @@ test("how was it: a past plan asks once, and the answer fills your places", asyn
   const after = (await me("/api/account")).data;
   assert.equal(after.review, null);
   assert.deepEqual(after.visits.map((v) => [v.name, v.withName, v.rating]), [["Sushi Place", "Bao", 1]]);
+});
+
+test("weather: a dry evening lets the rooftop win, and no forecast means no weather at all", async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    for (const [rain, top, hasWeather] of [[0, "Sky Rooftop", true], [null, "Sky Rooftop", false]]) {
+      globalThis.fetch = fakeEveningQloo(rain);
+      const p = await evening({ first: "Spirited Away", second: "Daft Punk", city: "New York", start: "18:30", day: "friday" }, "k", "https://hackathon.api.qloo.com");
+      assert.equal(p.stops[1].options[0].name, top);
+      assert.equal(!!p.weather, hasWeather);
+      assert.equal(p.stops[1].options[0].outdoor, true);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("visits remember how long you stayed without changing when you went", async () => {
+  let t = 1_800_000_000_000;
+  const store = openStore(":memory:", () => t);
+  const { user } = store.createUser({ username: "vy", password: "a good password", display: "Vy" });
+  const place = { id: "00000000-0000-4000-8000-000000000080", name: "Wine Bar" };
+  store.addVisit(user.id, place, "Bao");
+  t += 90 * 60000;
+  store.addVisit(user.id, place, "", 85);
+  const [v] = store.visitsOf(user.id);
+  assert.equal(v.minutes, 85);
+  assert.equal(v.withName, "Bao");
+  assert.equal(v.visited, 1_800_000_000_000);
 });
