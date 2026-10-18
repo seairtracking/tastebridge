@@ -54,16 +54,17 @@ function cleanPlace(p) {
   return { id: String(p.id), name: tidy(p.name, 100), address: tidy(p.address, 140), category: tidy(p.category, 60), image: p.image ? webUrl(p.image) : null, map: p.map ? webUrl(p.map) : null, lat: ok ? lat : null, lon: ok ? lon : null };
 }
 
-// A check-in photo: JPEG only, up to 3 MB, metadata (including GPS) stripped before it is stored.
-async function uploadPhoto(request, store, allow, visitId) {
+// A check-in or moment photo: JPEG only, up to 3 MB, metadata (including GPS) stripped before it is stored.
+async function uploadPhoto(request, store, allow, id, save = 'savePhoto') {
   const me = store.sessionUser(cookie(request, COOKIE));
   if (!me) return fail('Please sign in.', 401);
   if (!allow(request, 30, 'photo')) return fail('Too many uploads. Try again later.', 429);
   if (!/^image\/jpeg\b/.test(request.headers.get('content-type') || '')) return fail('Upload a JPEG photo.', 415);
   if (Number(request.headers.get('content-length') || 0) > 3 * 1024 * 1024) return fail('Photos can be up to 3 MB.', 413);
   const buf = Buffer.from(await request.arrayBuffer());
-  try { return json({ photo: '/api/photos/' + store.savePhoto(me.id, visitId, buf) }); } catch (e) { return fail(e.message, 400); }
+  try { return json({ photo: '/api/photos/' + store[save](me.id, id, buf) }); } catch (e) { return fail(e.message, 400); }
 }
+export const REACTIONS = ['❤️', '😂', '😮', '🔥', '👍', '😢'];
 
 // Every option in a plan that people can vote on, keyed by its Qloo id.
 const optionIds = (plan) => new Set([...(plan?.places || []), ...(plan?.stops || []).flatMap((s) => s.options), ...(plan?.films || [])].map((x) => x.id));
@@ -77,6 +78,7 @@ export async function handleSocial(request, env, { allow, runPlan }) {
   if (!sameOrigin(request)) return fail('Cross-site request blocked.', 403);
   const photoUpload = request.method === 'POST' && /^\/api\/account\/visits\/\d+\/photo$/.test(url.pathname);
   if (photoUpload) return uploadPhoto(request, store, allow, Number(url.pathname.split('/')[4]));
+  if (request.method === 'POST' && /^\/api\/account\/moments\/\d+\/photo$/.test(url.pathname)) return uploadPhoto(request, store, allow, Number(url.pathname.split('/')[4]), 'saveMomentPhoto');
   if (url.pathname.startsWith('/api/photos/') && request.method === 'GET') {
     const viewer = store.sessionUser(cookie(request, COOKIE));
     const buf = viewer ? store.photo(url.pathname.slice('/api/photos/'.length), viewer.id) : null;
@@ -129,7 +131,7 @@ export async function handleSocial(request, env, { allow, runPlan }) {
     }
     if (action === '' && request.method === 'GET') {
       if (!me) return json({ user: null });
-      return json({ user: me, friends: store.friendsOf(me.id), invites: store.invitesFor(me.id), rooms: store.roomsOf(me.id), visits: store.visitsOf(me.id), plans: store.plansOf(me.id), review: store.pendingReview(me.id) });
+      return json({ user: me, unseenMoments: store.unseenMoments(me.id), friends: store.friendsOf(me.id), invites: store.invitesFor(me.id), rooms: store.roomsOf(me.id), visits: store.visitsOf(me.id), plans: store.plansOf(me.id), review: store.pendingReview(me.id) });
     }
     if (!me) return fail('Please sign in.', 401);
     if (action === 'profile' && request.method === 'PUT') {
@@ -139,6 +141,26 @@ export async function handleSocial(request, env, { allow, runPlan }) {
         cuisine: CUISINES.includes(body.cuisine) ? body.cuisine : '', mood: MOODS.includes(body.mood) ? body.mood : '',
       });
       return json({ user });
+    }
+    // ---- moments: a quick photo or status for every accepted friend ----
+    if (action === 'moments' && request.method === 'GET') {
+      const list = store.momentsFor(me.id).map((m) => ({ ...m, photo: m.photo ? '/api/photos/' + m.photo : null }));
+      return json({ moments: list, unseen: store.unseenMoments(me.id), reactions: REACTIONS });
+    }
+    if (action === 'moments' && request.method === 'POST') {
+      if (!allow(request, 30, 'moment')) return fail('Too many posts. Try again later.', 429);
+      const caption = tidy(body.caption, 140), place = body.place ? cleanPlace(body.place) : null;
+      if (!caption && !body.photo) return fail('Add a photo or a few words.', 400);
+      return json({ id: store.addMoment(me.id, { caption, place }) });
+    }
+    if (action === 'moments/seen' && request.method === 'POST') { store.seeMoments(me.id); return json({ ok: true }); }
+    const mo = /^moments\/(\d+)\/(react|remove)$/.exec(action);
+    if (mo && request.method === 'POST') {
+      const id = Number(mo[1]);
+      if (mo[2] === 'remove') return store.removeMoment(me.id, id) ? json({ ok: true }) : fail('Moment not found.', 404);
+      const emoji = body.emoji ? (REACTIONS.includes(body.emoji) ? body.emoji : null) : '';
+      if (emoji === null) return fail('Unknown reaction.', 400);
+      return store.react(me.id, id, emoji) ? json({ ok: true }) : fail('Moment not found.', 404);
     }
     if (action === 'taste' && request.method === 'PUT') {
       const taste = cleanProfile(body.taste);

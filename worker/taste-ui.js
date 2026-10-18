@@ -1,7 +1,7 @@
 // Browser script for the taste profile sheet, served at /taste.js. A person picks genres and names a few
 // favorites per section; TasteBridge shows what they really like (shared Qloo traits) and uses the whole
 // profile as their signal when planning. Builds on the page's helpers (el, text, T, attachSuggest).
-import { SECTIONS, INSTRUMENTS, HOBBIES } from './taste.js';
+import { SECTIONS, INSTRUMENTS, HOBBY_GROUPS } from './taste.js';
 
 // English labels for every chip; translations live in i18n-taste.js under the same English text.
 export const LABELS = {
@@ -22,7 +22,20 @@ export const LABELS = {
   tennis: 'Tennis', golf: 'Golf', martial_arts: 'Martial arts', motorcycles: 'Motorbikes', architecture: 'Architecture', home_decor: 'Home decor',
   street_fashion: 'Street fashion', sneakerheads: 'Sneakers', wine_enthusiast: 'Wine', foodie: 'Food', cooking: 'Cooking', coffee: 'Coffee',
   avid_reader: 'Reading', cinephile: 'Films', museums: 'Museums', music_festivals: 'Music festivals', arts_culture: 'Art & culture', exercising: 'Working out',
+  adventuring: 'Adventures', adrenaline_rushers: 'Adrenaline', casual_escapists: 'Easy escapes', secret_unravelers: 'Mysteries and puzzles', spy_enthusiast: 'Spy stories',
+  american_football: 'American football', wrestling: 'Wrestling', racing: 'Racing', home_organization: 'Tidying up', high_fashion: 'High fashion',
+  jewellery: 'Jewellery', watches: 'Watches', perfume: 'Perfume', health_and_beauty: 'Health and beauty', tattoos: 'Tattoos', news_junkie: 'News',
+  healthy_eating: 'Healthy eating', veganism: 'Vegan', organic_ingredients: 'Organic food', astrology: 'Astrology', spirituality: 'Spirituality',
+  gourmand_fine_dining: 'Fine dining', discount_shoppers: 'Bargain hunting', boutique_hotels: 'Boutique hotels', vintage_apparel: 'Vintage clothes',
+  technology_enthusiast: 'Tech gadgets', watch_collecting: 'Watch collecting', parents_with_young_children: 'Parent of young kids', single: 'Single',
+  engaged: 'Engaged', retirement: 'Retired', business_professional: 'Business', technology_professional: 'Tech', marketing_professional: 'Marketing',
+  advertising_design: 'Advertising and design', finance_professional: 'Finance', sales_professional: 'Sales', retail_professional: 'Retail',
+  hospitality_professional: 'Hospitality', medical_professional: 'Healthcare', stocks_bonds: 'Stocks and bonds', real_estate: 'Real estate',
+  angel_start_up_investing: 'Startups', cryptocurrency_enthusiasts: 'Crypto', nft_collectors: 'NFTs', art_collectibles: 'Art collecting',
+  climate_activism: 'Climate', sustainability: 'Sustainability', ocean_health: 'Oceans', animal_issues: 'Animals', mental_health: 'Mental health',
+  education_issues: 'Education', gender_equality: 'Gender equality', racial_justice: 'Racial justice', wealth_inequality: 'Inequality', fair_wages: 'Fair pay', foreign_affairs: 'World affairs',
 };
+const GROUPS_EN = { hobbies: 'Hobbies', leisure: 'Free time', lifestyle: 'Lifestyle', spending: 'How you spend', life: 'Life stage', work: 'Work', investing: 'Investing', causes: 'Causes you care about' };
 const NAMES = { film: 'Films', tv: 'Series', music: 'Music', book: 'Books', game: 'Games', sport: 'Sports', travel: 'Travel', brand: 'Brands' };
 const BOX = { film: 'Films you love', tv: 'Series you love', music: 'Artists you love', book: 'Books or authors you love', game: 'Games you love', sport: 'Teams, leagues or athletes you follow', travel: 'Places you loved visiting', brand: 'Brands you love' };
 
@@ -61,8 +74,9 @@ function render(){dialog.replaceChildren();var box=text('div','in');dialog.appen
     box.append(d)});
   var h=document.createElement('details');h.className='taste-sec';var pr=state.profile;if(pr.instruments.length||pr.hobbies.length)h.open=true;var hs=document.createElement('summary');hs.textContent='🎸 '+T('Instruments and hobbies');h.append(hs);
   var r1=text('div','chips');INSTRUMENTS.forEach(function(t){r1.append(chip(label(t),pr.instruments.indexOf(t)>=0,function(){toggle(pr.instruments,t,5);render()}))});
-  var r2=text('div','chips');HOBBIES.forEach(function(t){r2.append(chip(label(t),pr.hobbies.indexOf(t)>=0,function(){toggle(pr.hobbies,t,8);render()}))});
-  h.append(text('div','taste-label',T('Instruments you play')),r1,text('div','taste-label',T('Hobbies')),r2,text('p','muted',T('These describe you in your portrait. They do not change the places: Qloo’s data on hobbies is too loose for that.')));box.append(h);
+  h.append(text('div','taste-label',T('Instruments you play')),r1);
+  HOBBY_GROUPS.forEach(function(g){var r=text('div','chips');g.ids.forEach(function(t){r.append(chip(label(t),pr.hobbies.indexOf(t)>=0,function(){toggle(pr.hobbies,t,20);render()}))});h.append(text('div','taste-label',T(GROUPS_EN[g.id])),r)});
+  h.append(text('p','muted',T('These describe you in your portrait. Qloo’s data on hobbies is too loose to pick places, so only a few act on the plan: vegan or healthy eating, bargain hunting, fine dining and young kids.')));box.append(h);
   var err=text('p','err','');var bar=text('div','bar-row');
   var go=text('button','btn primary',busy?T('Reading your taste…'):T('What do I really like?'));go.type='button';go.disabled=busy||!size();go.addEventListener('click',function(){ask(err)});
   var use=text('button','btn',T('Use for planning'));use.type='button';use.disabled=!size();use.addEventListener('click',function(){state.active=true;save();sync();dialog.close()});
@@ -86,5 +100,5 @@ document.addEventListener('tb:lang',function(){sync();if(dialog.open)render()});
 sync();`;
 
 export const tasteScript = '(function(){\'use strict\';var SECTIONS=' + JSON.stringify(SECTIONS.map(({ id, icon, types, genres }) => ({ id, icon, types, genres })))
-  + ',INSTRUMENTS=' + JSON.stringify(INSTRUMENTS) + ',HOBBIES=' + JSON.stringify(HOBBIES) + ',LABELS=' + JSON.stringify(LABELS)
+  + ',INSTRUMENTS=' + JSON.stringify(INSTRUMENTS) + ',HOBBY_GROUPS=' + JSON.stringify(HOBBY_GROUPS) + ',GROUPS_EN=' + JSON.stringify(GROUPS_EN) + ',LABELS=' + JSON.stringify(LABELS)
   + ',NAMES=' + JSON.stringify(NAMES) + ',BOX=' + JSON.stringify(BOX) + ';' + client + '})();';

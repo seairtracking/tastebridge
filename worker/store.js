@@ -88,6 +88,28 @@ CREATE TABLE IF NOT EXISTS visits (
   shared INTEGER NOT NULL DEFAULT 0,
   UNIQUE (user_id, place_id)
 );
+-- Moments: a quick photo or status shared with every accepted friend (like Locket), optionally at a place.
+CREATE TABLE IF NOT EXISTS moments (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  caption TEXT NOT NULL DEFAULT '',
+  photo TEXT,
+  place_id TEXT,
+  place_name TEXT NOT NULL DEFAULT '',
+  created INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS moments_by_user ON moments (user_id, created);
+CREATE TABLE IF NOT EXISTS moment_reactions (
+  moment_id INTEGER NOT NULL REFERENCES moments(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL,
+  created INTEGER NOT NULL,
+  PRIMARY KEY (moment_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS moment_seen (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  seen INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS saved_plans (
   id INTEGER PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -239,6 +261,7 @@ export function openStore(path, now = () => Date.now(), { photosDir = path === '
       try {
         for (const { room_id } of all('SELECT room_id FROM members WHERE user_id = ? AND slot = 0', userId)) run('DELETE FROM rooms WHERE id = ?', room_id);
         for (const { photo } of all('SELECT photo FROM visits WHERE user_id = ? AND photo IS NOT NULL', userId)) dropPhoto(photo);
+        for (const { photo } of all('SELECT photo FROM moments WHERE user_id = ? AND photo IS NOT NULL', userId)) dropPhoto(photo);
         run('DELETE FROM users WHERE id = ?', userId);
         db.exec('COMMIT');
       } catch (e) { db.exec('ROLLBACK'); throw e; }
@@ -285,12 +308,72 @@ export function openStore(path, now = () => Date.now(), { photosDir = path === '
       return run('UPDATE visits SET photo = NULL WHERE id = ?', visitId).changes > 0;
     },
     // A photo is visible to its owner, and to accepted friends when that check-in is shared.
+    // A moment's photo is always shared with accepted friends: that is what a moment is for.
     photo(name, viewerId) {
       if (!PHOTO_NAME.test(String(name)) || !viewerId) return null;
       const v = one('SELECT user_id, shared FROM visits WHERE photo = ?', name);
-      if (!v) return null;
-      if (v.user_id !== viewerId && !(v.shared && this.areFriends(viewerId, v.user_id))) return null;
+      const m = v ? null : one('SELECT user_id FROM moments WHERE photo = ?', name);
+      if (!v && !m) return null;
+      const owner = (v || m).user_id;
+      if (owner !== viewerId && !((m || v.shared) && this.areFriends(viewerId, owner))) return null;
       return readPhoto(name);
+    },
+
+    // ---- moments ----
+    // Posting at a place also checks you in there, so it shows on your Memories map and in Places you've been.
+    addMoment(userId, { caption, place }) {
+      if (place?.id) this.addVisit(userId, place);
+      const r = run('INSERT INTO moments (user_id, caption, place_id, place_name, created) VALUES (?, ?, ?, ?, ?)', userId, caption || '', place?.id || null, place?.name || '', now());
+      return Number(r.lastInsertRowid);
+    },
+    saveMomentPhoto(userId, momentId, buf) {
+      const m = one('SELECT photo FROM moments WHERE id = ? AND user_id = ?', momentId, userId);
+      if (!m) throw new Error('Moment not found.');
+      if (buf.length > PHOTO_MAX) throw new Error('Photos can be up to 3 MB.');
+      const clean = stripJpeg(buf);
+      if (!clean) throw new Error('Upload a JPEG photo.');
+      const name = randomBytes(24).toString('base64url') + '.jpg';
+      writePhoto(name, clean);
+      run('UPDATE moments SET photo = ? WHERE id = ?', name, momentId);
+      dropPhoto(m.photo);
+      return name;
+    },
+    removeMoment(userId, momentId) {
+      const m = one('SELECT photo FROM moments WHERE id = ? AND user_id = ?', momentId, userId);
+      if (!m) return false;
+      dropPhoto(m.photo);
+      return run('DELETE FROM moments WHERE id = ? AND user_id = ?', momentId, userId).changes > 0;
+    },
+    // Your moments and your accepted friends' moments, newest first, with reactions.
+    momentsFor(userId, limit = 60) {
+      const list = all(`SELECT m.id, m.user_id AS userId, u.display, u.username, m.caption, m.photo, m.place_name AS place, m.created
+        FROM moments m JOIN users u ON u.id = m.user_id
+        WHERE m.user_id = ? OR m.user_id IN (SELECT CASE WHEN a = ? THEN b ELSE a END FROM friends WHERE (a = ? OR b = ?) AND status = 'accepted')
+        ORDER BY m.created DESC LIMIT ?`, userId, userId, userId, userId, limit);
+      for (const m of list) {
+        m.mine = m.userId === userId;
+        m.reactions = all('SELECT emoji, COUNT(*) AS count FROM moment_reactions WHERE moment_id = ? GROUP BY emoji ORDER BY count DESC', m.id);
+        m.myReaction = one('SELECT emoji FROM moment_reactions WHERE moment_id = ? AND user_id = ?', m.id, userId)?.emoji || null;
+        if (m.mine) m.reactedBy = all('SELECT u.display, r.emoji FROM moment_reactions r JOIN users u ON u.id = r.user_id WHERE r.moment_id = ? ORDER BY r.created DESC LIMIT 20', m.id);
+        delete m.userId;
+      }
+      return list;
+    },
+    react(userId, momentId, emoji) {
+      const m = one('SELECT user_id FROM moments WHERE id = ?', momentId);
+      if (!m || (m.user_id !== userId && !this.areFriends(userId, m.user_id))) return false;
+      if (!emoji) return run('DELETE FROM moment_reactions WHERE moment_id = ? AND user_id = ?', momentId, userId).changes > 0;
+      run(`INSERT INTO moment_reactions (moment_id, user_id, emoji, created) VALUES (?, ?, ?, ?)
+        ON CONFLICT (moment_id, user_id) DO UPDATE SET emoji = excluded.emoji, created = excluded.created`, momentId, userId, emoji, now());
+      return true;
+    },
+    // How many friends' moments arrived since you last looked.
+    unseenMoments(userId) {
+      const seen = one('SELECT seen FROM moment_seen WHERE user_id = ?', userId)?.seen || 0;
+      return one(`SELECT COUNT(*) AS n FROM moments WHERE created > ? AND user_id != ? AND user_id IN (SELECT CASE WHEN a = ? THEN b ELSE a END FROM friends WHERE (a = ? OR b = ?) AND status = 'accepted')`, seen, userId, userId, userId, userId).n;
+    },
+    seeMoments(userId) {
+      run('INSERT INTO moment_seen (user_id, seen) VALUES (?, ?) ON CONFLICT (user_id) DO UPDATE SET seen = excluded.seen', userId, now());
     },
     memoriesOf(userId) {
       const mine = all(`SELECT id, place_id AS placeId, name, address, category, map, with_name AS withName, rating, visited, minutes, lat, lon, note, photo, shared
@@ -302,7 +385,7 @@ export function openStore(path, now = () => Date.now(), { photosDir = path === '
       return { mine, friends };
     },
     visitsOf(userId, limit = 100) {
-      return all('SELECT id, place_id AS placeId, name, address, category, image, map, with_name AS withName, rating, visited, minutes, note, photo, shared FROM visits WHERE user_id = ? ORDER BY visited DESC LIMIT ?', userId, limit);
+      return all('SELECT id, place_id AS placeId, name, address, category, image, map, with_name AS withName, rating, visited, minutes, lat, lon, note, photo, shared FROM visits WHERE user_id = ? ORDER BY visited DESC LIMIT ?', userId, limit);
     },
     // Place ids the agent should treat as "been there" (1) or "not for us" (-1) for these people.
     seenBy(userIds) {

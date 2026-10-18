@@ -556,10 +556,11 @@ test("every language has every message, with the same placeholders as English", 
   const { SOCIAL } = await import("../worker/i18n-social.js");
   const { MSG } = await import("../worker/i18n-msg.js");
   const { TASTE } = await import("../worker/i18n-taste.js");
+  const { MOMENTS } = await import("../worker/i18n-moments.js");
   const { LABELS } = await import("../worker/taste-ui.js");
   for (const l of Object.values(LABELS)) assert.ok(TASTE[l], `missing chip label ${l}`);
   const holes = (s) => (s.match(/\{\w+(?:\|\w+)?\}/g) || []).sort().join();
-  for (const [k, v] of Object.entries({ ...PAGE, ...SOCIAL, ...TASTE })) {
+  for (const [k, v] of Object.entries({ ...PAGE, ...SOCIAL, ...TASTE, ...MOMENTS })) {
     assert.equal(v.length, 9, k);
     for (const t of v) assert.equal(holes(t), holes(k), `${k} → ${t}`);
   }
@@ -569,9 +570,10 @@ test("every language has every message, with the same placeholders as English", 
   }
   const fs = await import("node:fs");
   const used = ["engine.js", "evening.js"].flatMap((f) => [...fs.readFileSync(new URL(`../worker/${f}`, import.meta.url), "utf8").matchAll(/M\('([\w.-]+)'/g)].map((m) => m[1]));
-  for (const k of used) assert.ok(MSG[k], `missing message ${k}`);
-  const client = ["page.js", "social-ui.js", "taste-ui.js"].flatMap((f) => [...fs.readFileSync(new URL(`../worker/${f}`, import.meta.url), "utf8").matchAll(/T\((?:'([^']+)'|"([^"]+)")/g)].map((m) => m[1] || m[2]));
-  for (const k of client) if (!/\.$/.test(k)) assert.ok(PAGE[k] || SOCIAL[k] || TASTE[k] || MSG[k], `missing text ${k}`);
+  for (const k of used) if (!k.endsWith(".")) assert.ok(MSG[k], `missing message ${k}`); // "pref." + p is checked below
+  for (const p of ["veg", "thrifty", "fine", "kids"]) assert.ok(MSG["pref." + p]);
+  const client = ["page.js", "social-ui.js", "taste-ui.js", "moments-ui.js"].flatMap((f) => [...fs.readFileSync(new URL(`../worker/${f}`, import.meta.url), "utf8").matchAll(/T\((?:'([^']+)'|"([^"]+)")/g)].map((m) => m[1] || m[2]));
+  for (const k of client) if (!/\.$/.test(k)) assert.ok(PAGE[k] || SOCIAL[k] || TASTE[k] || MOMENTS[k] || MSG[k], `missing text ${k}`);
 });
 
 test("the browser T() fills templates, translates references and falls back to English", async () => {
@@ -635,4 +637,47 @@ test("a taste profile keeps only known genres and real ids, and counts as one pe
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test("moments: friends see each other's photos and reactions at once, strangers see nothing", async () => {
+  const env = { QLOO_API_KEY: "k", STORE: openStore(":memory:") };
+  const ann = client(env), bob = client(env), cat = client(env);
+  for (const [c, u] of [[ann, "ann"], [bob, "bob"], [cat, "cat"]]) await c("/api/account/signup", { method: "POST", body: { username: u, password: "a good password", display: u } });
+  await ann("/api/account/friends", { method: "POST", body: { username: "bob" } });
+  await bob("/api/account/friends/accept", { method: "POST", body: { username: "ann" } });
+  assert.equal((await ann("/api/account/moments", { method: "POST", body: {} })).status, 400); // nothing to post
+  const place = { id: "00000000-0000-4000-8000-000000000080", name: "Rooftop Bar", lat: 10.77, lon: 106.7 };
+  const posted = await ann("/api/account/moments", { method: "POST", body: { caption: "Sunset with Bob", place, photo: true } });
+  assert.equal(posted.status, 200);
+  const gps = new TextEncoder().encode("Exif\0\0GPS 10.7N");
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0, gps.length + 2, ...gps, 0xff, 0xda, 0, 2, 9, 9, 0xff, 0xd9]);
+  assert.equal((await bob(`/api/account/moments/${posted.data.id}/photo`, { method: "POST", body: jpeg })).status, 400); // not Bob's moment
+  const up = await ann(`/api/account/moments/${posted.data.id}/photo`, { method: "POST", body: jpeg });
+  assert.equal(up.status, 200);
+  // posting at a place is also a check-in
+  assert.equal((await ann("/api/account/memories")).data.mine[0].name, "Rooftop Bar");
+  // Bob sees it straight away, with the photo, and it counts as new for him
+  assert.equal((await bob("/api/account")).data.unseenMoments, 1);
+  const feed = (await bob("/api/account/moments")).data;
+  assert.deepEqual(feed.moments.map((m) => [m.display, m.caption, m.place, m.mine]), [["ann", "Sunset with Bob", "Rooftop Bar", false]]);
+  const photo = await bob(feed.moments[0].photo);
+  assert.equal(photo.status, 200);
+  assert.equal(new TextDecoder().decode(photo.bytes).includes("GPS"), false);
+  await bob("/api/account/moments/seen", { method: "POST", body: {} });
+  assert.equal((await bob("/api/account")).data.unseenMoments, 0);
+  // reactions: one per person, from a fixed set
+  assert.equal((await bob(`/api/account/moments/${posted.data.id}/react`, { method: "POST", body: { emoji: "💩" } })).status, 400);
+  await bob(`/api/account/moments/${posted.data.id}/react`, { method: "POST", body: { emoji: "🔥" } });
+  await bob(`/api/account/moments/${posted.data.id}/react`, { method: "POST", body: { emoji: "❤️" } });
+  const mine = (await ann("/api/account/moments")).data.moments[0];
+  assert.deepEqual(mine.reactions, [{ emoji: "❤️", count: 1 }]);
+  assert.deepEqual(mine.reactedBy, [{ display: "bob", emoji: "❤️" }]);
+  // Cat is not a friend: no feed, no photo, no reacting
+  assert.equal((await cat("/api/account/moments")).data.moments.length, 0);
+  assert.equal((await cat(feed.moments[0].photo)).status, 404);
+  assert.equal((await cat(`/api/account/moments/${posted.data.id}/react`, { method: "POST", body: { emoji: "❤️" } })).status, 404);
+  // only the author can remove it, and the photo goes with it
+  assert.equal((await bob(`/api/account/moments/${posted.data.id}/remove`, { method: "POST", body: {} })).status, 404);
+  assert.equal((await ann(`/api/account/moments/${posted.data.id}/remove`, { method: "POST", body: {} })).status, 200);
+  assert.equal((await bob(feed.moments[0].photo)).status, 404);
 });

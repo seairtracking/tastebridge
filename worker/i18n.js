@@ -5,6 +5,7 @@ import { PAGE } from './i18n-page.js';
 import { SOCIAL } from './i18n-social.js';
 import { MSG } from './i18n-msg.js';
 import { TASTE } from './i18n-taste.js';
+import { MOMENTS } from './i18n-moments.js';
 
 export const LANGS = [
   ['en', 'English'], ['vi', 'Tiếng Việt'], ['ja', '日本語'], ['ko', '한국어'], ['zh', '中文'],
@@ -26,7 +27,7 @@ function T(key,vars){if(key==null||key==='')return '';if(typeof key==='object')r
     if(v&&typeof v==='object')return T(v.k,v.v);if(v==null)return '';return f?raw(f+'.'+v):String(v)})}
 T.has=function(key){return !!(MSG[key]||TEXT[key]||REV[key])};
 function cap(s,like){return /^[A-Z]/.test(like)?s.charAt(0).toUpperCase()+s.slice(1):s}
-var SKIP='script,style,#results,#agent,#room,#accountDialog,#notice,.suggest,#review,#checkin,#lang';
+var SKIP='script,style,#results,#agent,#room,#accountDialog,#tasteDialog,#momentDialog,#moments,#notice,.suggest,#review,#checkin,#lang';
 function apply(){document.documentElement.lang=lang;document.title=T('TasteBridge — find your common ground');
   var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),n;
   while((n=w.nextNode())){var p=n.parentElement;if(!p||p.closest(SKIP))continue;var e=MEM.get(n),orig=e&&n.nodeValue===e.set?e.orig:n.nodeValue,t=orig.trim();
@@ -39,4 +40,4 @@ function setLang(code){if(CODES.indexOf(code)<0||code===lang)return;lang=code;wi
 window.T=T;window.tbLang=lang;window.tbLangs=LANGS;window.tbSetLang=setLang;
 apply();picker();`;
 
-export const i18nScript = `(function(){'use strict';var TEXT=${JSON.stringify({ ...PAGE, ...SOCIAL, ...TASTE })},MSG=${JSON.stringify(MSG)},LANGS=${JSON.stringify(LANGS)};${client}})();`;
+export const i18nScript = `(function(){'use strict';var TEXT=${JSON.stringify({ ...PAGE, ...SOCIAL, ...TASTE, ...MOMENTS })},MSG=${JSON.stringify(MSG)},LANGS=${JSON.stringify(LANGS)};${client}})();`;

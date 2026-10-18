@@ -4,6 +4,7 @@
 // when there is too little to choose from.
 import { ORIGIN, tidy, insights, kind } from './qloo.js';
 import { M, understandAll, pickFilms, bridgeN, cityKey, inCity, occasionFit, readFavorites, seedSummary, soft, who } from './engine.js';
+import { profilePrefs } from './taste.js';
 
 export const CUISINES = ['vietnamese', 'japanese', 'korean', 'chinese', 'thai', 'indian', 'italian', 'french', 'mexican', 'american', 'mediterranean', 'vegetarian'];
 export const MOODS = ['romantic', 'cozy', 'lively', 'quiet', 'chill'];
@@ -166,6 +167,10 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
   const seen = input?.seen && typeof input.seen === 'object' ? input.seen : {};
   const steps = [];
   const step = (id, label, detail, t) => { const s = { id, label, detail, ...(t ? { t } : {}) }; steps.push(s); onStep(s); };
+  // A few hobbies in a taste profile act through the planner's own filters (see taste.js PREFS).
+  const prefs = profilePrefs(q.profiles);
+  if (prefs.includes('kids') && !q.special) q.special = 'family'; // parents of young children get the family evening
+  if (prefs.includes('veg') && !q.cuisine) q.cuisine = 'vegetarian'; // searched first; the agent widens it if too little fits
   const sp = q.special ? SPECIALS[q.special] : null;
   if (sp && !q.mood) q.mood = sp.mood;
   const area = q.near ? 'near you' : q.city;
@@ -174,6 +179,8 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
 
   const { seeds, filmList, warning, warningKey } = await understandAll(q.favorites, key, origin, step, q.picks, q.profiles);
   const ids = seeds.map((s) => s.id), n = ids.length;
+  const PREF_TEXT = { veg: 'Vegetarian and vegan dishes come first.', thrifty: 'Places that are easy on the wallet come first.', fine: 'Fine dining comes first.', kids: 'Family-friendly places, for a parent of young children.' };
+  if (prefs.length) step('profile', 'Using your taste profile', prefs.map((p) => PREF_TEXT[p]).join(' '), { l: M('s.prefs.l'), d: prefs.map((p) => M('pref.' + p)) });
 
   // 1. Dinner: cuisine and mood first; the agent relaxes the mood, then the cuisine, if too little fits.
   const restaurant = 'urn:tag:category:place:restaurant';
@@ -185,6 +192,8 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
     if (q.mood) f *= x.ambience?.includes(q.mood) ? 1.3 : 0.85;
     if (q.cuisine) f *= x.cuisines?.includes(q.cuisine) ? 1.25 : 0.7;
     if (q.budget && x.price) f *= x.price <= q.budget ? 1 : 0.4;
+    if (prefs.includes('thrifty') && x.price) f *= x.price >= 3 ? 0.6 : 1.1;
+    if (prefs.includes('fine') && x.price) f *= x.price >= 3 ? 1.3 : x.price <= 1 ? 0.7 : 1;
     f *= occasionBoost(x, sp);
     const open = openAt(x.hours, q.day, q.start);
     return f * (open === 'closed' ? 0.2 : 1);

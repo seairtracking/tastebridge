@@ -22,7 +22,9 @@ const ROUTES = {
 import { socialScript } from './social-ui.js';
 import { i18nScript } from './i18n.js';
 import { tasteScript } from './taste-ui.js';
+import { momentsScript } from './moments-ui.js';
 ROUTES['/social.js'] = () => new Response(socialScript, { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' } });
+ROUTES['/moments.js'] = () => new Response(momentsScript, { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' } });
 ROUTES['/taste.js'] = () => new Response(tasteScript, { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' } });
 ROUTES['/i18n.js'] = () => new Response(i18nScript, { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' } });
 

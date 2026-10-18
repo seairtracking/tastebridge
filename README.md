@@ -48,6 +48,14 @@ Two ways to use it:
   *Gone Girl*, *The Silent Patient*). Instruments and hobbies describe you but never steer places: Qloo's hobby
   audiences proved too loose. In a plan, the profile is one person's signal, and their share follows their best-fitting
   favorite, so naming five things does not outweigh a friend who named one.
+- **Hobbies and lifestyle:** 99 of Qloo's audiences in eight groups (hobbies, free time, lifestyle, spending, life
+  stage, work, investing, causes). Religion, politics and ethnic or LGBTQ communities are left out on purpose. A few
+  act on the plan through the planner's own filters: vegan or healthy eating searches vegetarian dinner first,
+  bargain hunting and fine dining steer the price, and a parent of young kids gets the family evening.
+- **Moments (like Locket):** tap 📸 to post a photo (take one or pick one) or a few words, optionally checked in at a
+  place from your plan or one you have been to. Every accepted friend sees it at the top of their app, with a "new"
+  count, and can react (❤️ 😂 😮 🔥 👍 😢). Photos lose EXIF/GPS on the server and are served only to you and your
+  friends. A home-screen widget needs a native iOS/Android app, which is planned for later.
 - **10 languages:** English, Tiếng Việt, 日本語, 한국어, 中文, ไทย, Bahasa Indonesia, Español, Français and
   Deutsch. The app follows the phone's language and has a picker in the header. The agent's steps, reasons,
   tips and errors are sent as message keys, so a finished plan switches language without asking Qloo again.
@@ -206,6 +214,7 @@ worker/mcp.js       MCP server: tool definitions and JSON-RPC handling
 worker/page.js      The web app (single page, no build step)
 worker/taste.js     Taste profile: checked Qloo genre ids, portrait from shared tags, discoveries per domain
 worker/taste-ui.js  Browser script for the taste profile sheet
+worker/moments-ui.js Browser script for moments: post, friends strip, feed and reactions
 worker/i18n*.js     Translations (page, accounts, agent messages) and the browser T() helper
 local-server.mjs    Node.js HTTP adapter that serves the worker on a normal server, with streaming
 tests/              node:test unit tests with a mocked Qloo API

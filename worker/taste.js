@@ -18,13 +18,29 @@ export const SECTIONS = [
   { id: 'brand', icon: '🏷️', types: ['brand'], genreType: 'brand', genres: ['fashion', 'retail', 'electronics', 'automotive', 'travel', 'entertainment'].map((g) => BR + g) },
 ];
 export const INSTRUMENTS = ['guitar', 'piano', 'violin', 'drums', 'ukulele', 'saxophone', 'bass', 'flute', 'cello', 'trumpet', 'keyboards', 'synthesizers', 'vocals'].map((g) => IN + g);
-// Hobbies are Qloo audiences. As signals they are noisy (photography → a comedy club), so they describe the
-// person in their portrait but never steer the places or films.
-const HB = 'urn:audience:hobbies_and_interests:', LE = 'urn:audience:leisure:';
-export const HOBBIES = [
-  ...['photography', 'hiking', 'travel', 'yoga', 'running', 'musician', 'video_gamer', 'arts_crafts', 'dance', 'meditation', 'outdoors', 'swimming', 'fishing', 'tennis', 'golf', 'martial_arts', 'motorcycles', 'architecture', 'home_decor', 'street_fashion', 'sneakerheads', 'wine_enthusiast'].map((h) => HB + h),
-  ...['foodie', 'cooking', 'coffee', 'avid_reader', 'cinephile', 'museums', 'music_festivals', 'arts_culture', 'exercising'].map((h) => LE + h),
-];
+// Hobbies and lifestyle are Qloo audiences. As taste signals they are noisy (photography → a comedy club), so
+// they describe the person in their portrait and never steer Qloo's results. A few map to the planner's own
+// filters instead (see PREFS). Religion, politics and ethnic or LGBTQ communities are left out on purpose:
+// TasteBridge does not collect sensitive traits.
+const AU = 'urn:audience:';
+export const HOBBY_GROUPS = [
+  ['hobbies', 'hobbies_and_interests', ['photography', 'hiking', 'travel', 'yoga', 'running', 'musician', 'video_gamer', 'arts_crafts', 'dance', 'meditation', 'outdoors', 'swimming', 'fishing', 'adventuring', 'adrenaline_rushers', 'casual_escapists', 'secret_unravelers', 'spy_enthusiast', 'soccer', 'basketball', 'baseball', 'american_football', 'hockey', 'tennis', 'golf', 'martial_arts', 'wrestling', 'racing', 'motorcycles', 'automotive', 'architecture', 'home_decor', 'home_organization', 'high_fashion', 'street_fashion', 'sneakerheads', 'jewellery', 'watches', 'perfume', 'health_and_beauty', 'tattoos', 'wine_enthusiast']],
+  ['leisure', 'leisure', ['foodie', 'cooking', 'coffee', 'avid_reader', 'cinephile', 'museums', 'music_festivals', 'arts_culture', 'exercising', 'news_junkie']],
+  ['lifestyle', 'lifestyle_preferences_beliefs', ['healthy_eating', 'veganism', 'organic_ingredients', 'astrology', 'spirituality']],
+  ['spending', 'spending_habits', ['gourmand_fine_dining', 'discount_shoppers', 'boutique_hotels', 'vintage_apparel', 'technology_enthusiast', 'watch_collecting']],
+  ['life', 'life_stage', ['parents_with_young_children', 'single', 'engaged', 'retirement']],
+  ['work', 'professional_area', ['business_professional', 'technology_professional', 'marketing_professional', 'advertising_design', 'finance_professional', 'sales_professional', 'retail_professional', 'hospitality_professional', 'medical_professional']],
+  ['investing', 'investing_interests', ['stocks_bonds', 'real_estate', 'angel_start_up_investing', 'cryptocurrency_enthusiasts', 'nft_collectors', 'art_collectibles']],
+  ['causes', 'global_issues', ['climate_activism', 'sustainability', 'ocean_health', 'animal_issues', 'mental_health', 'education_issues', 'gender_equality', 'racial_justice', 'wealth_inequality', 'fair_wages', 'foreign_affairs']],
+].map(([id, type, list]) => ({ id, ids: list.map((h) => AU + type + ':' + h) }));
+export const HOBBIES = HOBBY_GROUPS.flatMap((g) => g.ids);
+// Hobbies the planner can act on directly, with its own filters rather than Qloo signals.
+const PREF_OF = {
+  [AU + 'lifestyle_preferences_beliefs:veganism']: 'veg', [AU + 'lifestyle_preferences_beliefs:healthy_eating']: 'veg',
+  [AU + 'spending_habits:discount_shoppers']: 'thrifty', [AU + 'spending_habits:gourmand_fine_dining']: 'fine',
+  [AU + 'life_stage:parents_with_young_children']: 'kids',
+};
+export const profilePrefs = (profiles) => [...new Set((profiles || []).filter(Boolean).flatMap((p) => (p.hobbies || []).map((h) => PREF_OF[h]).filter(Boolean)))];
 const GENRE_SECTION = new Map(SECTIONS.flatMap((s) => s.genres.map((g) => [s.id + '|' + g, s])));
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PICKS = 12, MAX_GENRES = 8, PER_SECTION = 3;
@@ -44,7 +60,7 @@ export function cleanProfile(input) {
     if (p.length || g.length) out.sections[s.id] = { picks: p, genres: g };
   }
   out.instruments = [...new Set((input?.instruments || []).filter((t) => INSTRUMENTS.includes(t)))].slice(0, 5);
-  out.hobbies = [...new Set((input?.hobbies || []).filter((t) => HOBBIES.includes(t)))].slice(0, 8);
+  out.hobbies = [...new Set((input?.hobbies || []).filter((t) => HOBBIES.includes(t)))].slice(0, 20);
   return out;
 }
 export const profileSize = (p) => Object.values(p.sections).reduce((t, s) => t + s.picks.length + s.genres.length, 0);
