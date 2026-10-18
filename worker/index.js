@@ -6,7 +6,10 @@ import { evening, parseEvening } from './evening.js';
 import { handleMcp } from './mcp.js';
 import { page } from './page.js';
 import { appRoute } from './app.js';
-import { handleSocial } from './social.js';
+import { handleSocial, sessionUser, planTitle } from './social.js';
+
+// Small stable hash (FNV-1a) for cache keys; works in Workers and Node alike.
+const fnv = (text) => { let h = 0x811c9dc5; for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); };
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 
@@ -20,7 +23,9 @@ const MODES = {
 const cache = new Map();
 function cacheKey(mode, input) {
   try {
-    return MODES[mode].key(input).join('|').toLowerCase();
+    // Plans that know where people have been are personal, so their key includes that history.
+    const seen = input?.seen && Object.keys(input.seen).length ? fnv(JSON.stringify(Object.entries(input.seen).sort())) : '';
+    return [...MODES[mode].key(input), seen].join('|').toLowerCase();
   } catch {
     return null;
   }
@@ -85,6 +90,10 @@ async function planRoute(mode, request, env) {
   if (Number(request.headers.get('content-length') || 0) > 3000) return json({ error: 'Request is too large.' }, 413);
   let input;
   try { input = await request.json(); } catch { return json({ error: 'Invalid JSON.' }, 400); }
+  if (input && typeof input === 'object') delete input.seen; // only the server knows where someone has been
+  const me = sessionUser(request, env.STORE);
+  if (me) input.seen = env.STORE.seenBy([me.id]);
+  const keep = (result) => { if (me) env.STORE.savePlanFor(me.id, planTitle(result, (result.seeds || []).map((x) => x.person).filter(Boolean)[1]), result); };
   const key = cacheKey(mode, input);
   if (!key) {
     try { MODES[mode].key(input); } catch (error) { return json({ error: error.message }, 422); }
@@ -93,12 +102,13 @@ async function planRoute(mode, request, env) {
   const hit = cache.get(key);
   const cached = hit && hit.expires > Date.now() ? hit.value : null;
   const origin = qlooOrigin(env);
-  if ((request.headers.get('accept') || '').includes('application/x-ndjson')) return streamPlan(mode, input, env.QLOO_API_KEY, origin, cached, () => allow(request));
-  if (cached) return json(cached);
+  if ((request.headers.get('accept') || '').includes('application/x-ndjson')) return streamPlan(mode, input, env.QLOO_API_KEY, origin, cached, () => allow(request), keep);
+  if (cached) { keep(cached); return json(cached); }
   if (!allow(request)) return json({ error: 'Too many plans from this connection. Try again in a few minutes.' }, 429);
   try {
     const result = await MODES[mode].run(input, env.QLOO_API_KEY, origin);
     remember(key, result);
+    keep(result);
     return json(result);
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : 'Plan failed.' }, 422);

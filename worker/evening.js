@@ -111,20 +111,20 @@ const where = (point, city, radius) => (point
   : { 'filter.location.query': city, 'filter.location.radius': radius });
 
 // One fair search round: each person's list plus the combined list with explainability, ranked by `bridgeN`.
-async function round(ids, params, opts, key, origin) {
+async function round(ids, params, opts, key, origin, seen) {
   const [lists, joint] = await Promise.all([
     Promise.all(ids.map((id) => soft(insights({ ...params, 'signal.interests.entities': id }, key, origin)))),
     ids.length > 1 ? soft(insights({ ...params, 'signal.interests.entities': ids.join(','), 'feature.explainability': 'true' }, key, origin)) : Promise.resolve([]),
   ]);
-  return bridgeN(lists, joint, { seeds: ids, take: 12, ...opts });
+  return bridgeN(lists, joint, { seeds: ids, take: 12, seen, ...opts });
 }
 
 // Runs search attempts until enough suitable places exist, keeping the best attempt and logging refinements.
-async function search(stage, attempts, { ids, key, origin, step, accept }) {
+async function search(stage, attempts, { ids, key, origin, step, accept, seen }) {
   let best = [], bestCount = -1;
   for (const [n, attempt] of attempts.entries()) {
     if (n > 0) step('refine', `Refining the ${stage}`, `Only ${Math.max(bestCount, 0)} good ${attempt.plural} so far, so the agent ${attempt.why}.`);
-    const pool = await round(ids, attempt.params, attempt.opts, key, origin);
+    const pool = await round(ids, attempt.params, attempt.opts, key, origin, seen);
     const good = pool.filter(accept);
     // Places that are mainly the right kind lead; the rest keep their fairness order behind them.
     const ranked = good.sort((x, y) => (y.fit === 1) - (x.fit === 1));
@@ -136,6 +136,7 @@ async function search(stage, attempts, { ids, key, origin, step, accept }) {
 
 export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
   const q = parseEvening(input);
+  const seen = input?.seen && typeof input.seen === 'object' ? input.seen : {};
   const steps = [];
   const step = (id, label, detail) => { const s = { id, label, detail }; steps.push(s); onStep(s); };
   const sp = q.special ? SPECIALS[q.special] : null;
@@ -173,7 +174,7 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
     { params: { ...base, ...where(q.near, q.city, r0 * 2.5), ...tags(restaurant) }, opts: dinnerOpts, enough: 2, plural: 'restaurants', why: `widened the search to ${(r0 * 2.5) / 1000} km${q.cuisine ? ` and opened it to cuisines close to ${q.cuisine}` : ''}` },
   ].filter(Boolean);
   const dinner = await search('dinner', dinnerAttempts, {
-    ids, key, origin, step,
+    ids, key, origin, step, seen,
     accept: (p) => p.fit >= 0.75 && inCity(p.address, ck) && p.open !== 'closed' && (!q.cuisine || p.cuisineMatch),
   });
   if (!dinner.length) throw new Error(`Qloo found no restaurants ${q.near ? 'near you' : 'in ' + q.city} for this pair. Try another cuisine or area.`);
@@ -197,7 +198,7 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
   const after = anchor ? await search('second stop', [
     { params: { ...base, ...where(anchor, q.city, 1200), 'filter.tags': afterTag }, opts: { fits: AFTER_FITS, boost: nearBoost(afterTime, q.mood), extra: nearExtra(afterTime) }, enough: 2 },
     { params: { ...base, ...where(anchor, q.city, 3000), 'filter.tags': afterTag }, opts: { fits: AFTER_FITS, boost: nearBoost(afterTime, q.mood), extra: nearExtra(afterTime) }, enough: 1, plural: 'places', why: 'widened the walk to about 3 km' },
-  ], { ids, key, origin, step, accept: (p) => !taken.has(p.id) && p.fit >= 0.75 && p.open !== 'closed' && (!sp?.family || familyFriendly(p.category)) }) : [];
+  ], { ids, key, origin, step, seen, accept: (p) => !taken.has(p.id) && p.fit >= 0.75 && p.open !== 'closed' && (!sp?.family || familyFriendly(p.category)) }) : [];
   const afterList = after.filter((p) => !taken.has(p.id) && (!sp?.family || familyFriendly(p.category)));
   afterList.slice(0, 3).forEach((p) => taken.add(p.id)); // the show list should offer different places
 
@@ -217,7 +218,7 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
   const show = anchor ? await search('show', [
     { params: { ...base, ...where(anchor, q.city, 2500), 'filter.tags': SHOW_TAGS }, opts: { fits: SHOW_FITS, boost: showBoost, extra: nearExtra(showTime) }, enough: 2 },
     { params: { ...base, ...where(anchor, q.city, 6000), 'filter.tags': SHOW_TAGS }, opts: { fits: SHOW_FITS, boost: showBoost, extra: nearExtra(showTime) }, enough: 1, plural: 'venues', why: 'widened the search to about 6 km' },
-  ], { ids, key, origin, step, accept: (p) => !taken.has(p.id) && p.fit >= 0.75 && p.open !== 'closed' && (!sp?.family || familyFriendly(p.category)) }) : [];
+  ], { ids, key, origin, step, seen, accept: (p) => !taken.has(p.id) && p.fit >= 0.75 && p.open !== 'closed' && (!sp?.family || familyFriendly(p.category)) }) : [];
   const showList = show.filter((p) => !taken.has(p.id) && (!sp?.family || familyFriendly(p.category)));
 
   // 4. A film for home.

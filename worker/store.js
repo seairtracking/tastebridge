@@ -11,6 +11,12 @@ export const hash = (token) => createHash('sha256').update(String(token)).digest
 export const token = (bytes = 24) => randomBytes(bytes).toString('base64url');
 const ROOM_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'; // no look-alike characters, easy to read out loud
 export const roomId = () => [...randomBytes(10)].map((b) => ROOM_ALPHABET[b % ROOM_ALPHABET.length]).join('');
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+export function recoveryCode() {
+  const c = [...randomBytes(16)].map((b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
+  return c.match(/.{4}/g).join('-');
+}
+const normalizeCode = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 // Passwords: scrypt with a random salt, compared in constant time.
 export function hashPassword(password) {
@@ -38,7 +44,30 @@ CREATE TABLE IF NOT EXISTS users (
   city TEXT NOT NULL DEFAULT '',
   cuisine TEXT NOT NULL DEFAULT '',
   mood TEXT NOT NULL DEFAULT '',
-  created INTEGER NOT NULL
+  created INTEGER NOT NULL,
+  recovery TEXT
+);
+CREATE TABLE IF NOT EXISTS visits (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  place_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  address TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT '',
+  image TEXT,
+  map TEXT,
+  with_name TEXT NOT NULL DEFAULT '',
+  rating INTEGER NOT NULL DEFAULT 0 CHECK (rating IN (-1, 0, 1)),
+  visited INTEGER NOT NULL,
+  UNIQUE (user_id, place_id)
+);
+CREATE TABLE IF NOT EXISTS saved_plans (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  plan TEXT NOT NULL,
+  created INTEGER NOT NULL,
+  reviewed INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (
   hash TEXT PRIMARY KEY,
@@ -89,6 +118,7 @@ CREATE TABLE IF NOT EXISTS votes (
 export function openStore(path, now = () => Date.now()) {
   const db = new DatabaseSync(path);
   db.exec(SCHEMA);
+  if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'recovery')) db.exec('ALTER TABLE users ADD COLUMN recovery TEXT');
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
@@ -106,10 +136,34 @@ export function openStore(path, now = () => Date.now()) {
     sweep,
 
     // ---- accounts ----
+    // Returns the user and a one-time recovery code; only its hash is stored.
     createUser({ username, password, display }) {
       if (one('SELECT 1 FROM users WHERE username = ?', username)) throw new Error('That username is taken.');
-      const r = run('INSERT INTO users (username, pass, display, created) VALUES (?, ?, ?, ?)', username, hashPassword(password), display, now());
-      return publicUser(one('SELECT * FROM users WHERE id = ?', Number(r.lastInsertRowid)));
+      const code = recoveryCode();
+      const r = run('INSERT INTO users (username, pass, display, created, recovery) VALUES (?, ?, ?, ?, ?)', username, hashPassword(password), display, now(), hashPassword(normalizeCode(code)));
+      return { user: publicUser(one('SELECT * FROM users WHERE id = ?', Number(r.lastInsertRowid))), recoveryCode: code };
+    },
+    // Forgot password: a valid recovery code sets a new password, signs out every device and issues a new code.
+    recover(username, code, password) {
+      const u = one('SELECT * FROM users WHERE username = ?', username);
+      const ok = checkPassword(normalizeCode(code), u?.recovery || DUMMY);
+      if (!u || !ok) return null;
+      const next = recoveryCode();
+      run('UPDATE users SET pass = ?, recovery = ? WHERE id = ?', hashPassword(password), hashPassword(normalizeCode(next)), u.id);
+      run('DELETE FROM sessions WHERE user_id = ?', u.id);
+      return { user: publicUser(u), recoveryCode: next };
+    },
+    changePassword(userId, current, password, keepSession) {
+      const u = one('SELECT pass FROM users WHERE id = ?', userId);
+      if (!u || !checkPassword(current, u.pass)) return false;
+      run('UPDATE users SET pass = ? WHERE id = ?', hashPassword(password), userId);
+      run('DELETE FROM sessions WHERE user_id = ? AND hash != ?', userId, hash(keepSession || '')); // other devices sign out
+      return true;
+    },
+    newRecoveryCode(userId) {
+      const code = recoveryCode();
+      run('UPDATE users SET recovery = ? WHERE id = ?', hashPassword(normalizeCode(code)), userId);
+      return code;
     },
     login(username, password) {
       const u = one('SELECT * FROM users WHERE username = ?', username);
@@ -144,6 +198,42 @@ export function openStore(path, now = () => Date.now()) {
       } catch (e) { db.exec('ROLLBACK'); throw e; }
     },
     userByName(username) { return publicUser(one('SELECT * FROM users WHERE username = ?', username)); },
+
+    // ---- places you have been, and plans you made ----
+    addVisit(userId, place, withName = '') {
+      run(`INSERT INTO visits (user_id, place_id, name, address, category, image, map, with_name, visited) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (user_id, place_id) DO UPDATE SET visited = excluded.visited, with_name = excluded.with_name`,
+        userId, place.id, place.name, place.address || '', place.category || '', place.image || null, place.map || null, withName, now());
+    },
+    rateVisit(userId, visitId, rating) { return run('UPDATE visits SET rating = ? WHERE id = ? AND user_id = ?', rating, visitId, userId).changes > 0; },
+    removeVisit(userId, visitId) { return run('DELETE FROM visits WHERE id = ? AND user_id = ?', visitId, userId).changes > 0; },
+    visitsOf(userId, limit = 100) {
+      return all('SELECT id, place_id AS placeId, name, address, category, image, map, with_name AS withName, rating, visited FROM visits WHERE user_id = ? ORDER BY visited DESC LIMIT ?', userId, limit);
+    },
+    // Place ids the agent should treat as "been there" (1) or "not for us" (-1) for these people.
+    seenBy(userIds) {
+      const ids = userIds.filter(Boolean);
+      if (!ids.length) return {};
+      const rows = all(`SELECT place_id, MIN(rating) AS rating FROM visits WHERE user_id IN (${ids.map(() => '?').join(',')}) GROUP BY place_id`, ...ids);
+      return Object.fromEntries(rows.map((r) => [r.place_id, r.rating < 0 ? -1 : 1]));
+    },
+    savePlanFor(userId, title, plan) {
+      run('INSERT INTO saved_plans (user_id, title, plan, created) VALUES (?, ?, ?, ?)', userId, title, JSON.stringify(plan), now());
+      // keep the 30 most recent plans per person
+      run('DELETE FROM saved_plans WHERE user_id = ? AND id NOT IN (SELECT id FROM saved_plans WHERE user_id = ? ORDER BY created DESC LIMIT 30)', userId, userId);
+    },
+    plansOf(userId) { return all('SELECT id, title, created FROM saved_plans WHERE user_id = ? ORDER BY created DESC', userId); },
+    savedPlan(userId, id) {
+      const r = one('SELECT plan FROM saved_plans WHERE id = ? AND user_id = ?', id, userId);
+      return r ? JSON.parse(r.plan) : null;
+    },
+    removePlan(userId, id) { return run('DELETE FROM saved_plans WHERE id = ? AND user_id = ?', id, userId).changes > 0; },
+    // "How was it?": the latest plan from at least 3 hours ago (and under a week old) that nobody answered yet.
+    pendingReview(userId) {
+      const r = one('SELECT id, title, plan, created FROM saved_plans WHERE user_id = ? AND reviewed = 0 AND created < ? AND created > ? ORDER BY created DESC LIMIT 1', userId, now() - 3 * 3600000, now() - 7 * DAY);
+      return r ? { id: r.id, title: r.title, created: r.created, plan: JSON.parse(r.plan) } : null;
+    },
+    markReviewed(userId, id) { return run('UPDATE saved_plans SET reviewed = 1 WHERE id = ? AND user_id = ?', id, userId).changes > 0; },
 
     // ---- friends: a request must be accepted before either side can use the other's favorite ----
     requestFriend(userId, otherId) {

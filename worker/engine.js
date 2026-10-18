@@ -86,12 +86,12 @@ const asPair = (s) => (s && s.length === 2 ? { a: s[0], b: s[1] } : null);
 export const who = (n) => (n === 1 ? 'you' : n === 2 ? 'both of you' : 'everyone');
 
 // Fairness-weighted reciprocal-rank ranking over each person's list and the combined list (1 to 4 people).
-export function bridgeN(lists, joint, { seeds = [], take = 4, city = '', fits = null, boost = () => 1, extra = () => ({}) } = {}) {
+export function bridgeN(lists, joint, { seeds = [], take = 4, city = '', fits = null, boost = () => 1, extra = () => ({}), seen = {} } = {}) {
   const key = cityKey(city), n = lists.length;
   const rank = (list) => new Map(list.map((x, i) => [x.id, i + 1]));
   const ranks = lists.map(rank), rj = rank(joint);
   const pool = new Map([...lists.flat(), ...joint].map((x) => [x.id, x])); // combined entries win: they carry explainability
-  return [...pool.values()].filter((x) => !adultVenue(x)).map((x) => {
+  return [...pool.values()].filter((x) => !adultVenue(x) && seen[x.id] !== -1).map((x) => {
     const r = ranks.map((m) => m.get(x.id) || null), jr = rj.get(x.id) || null;
     const v = r.map((k) => (k ? 1 / (4 + k) : 0)), jv = jr ? 1 / (4 + jr) : 0;
     const sum = v.reduce((t, y) => t + y, 0);
@@ -101,6 +101,7 @@ export function bridgeN(lists, joint, { seeds = [], take = 4, city = '', fits = 
     if (!inCity(x.address, key)) score *= 0.35; // outside the city the user asked for
     score *= occasionFit(x.categories, fits); // e.g. a museum with a bar is not really a drinks spot
     score *= boost(x); // evening plans: mood, cuisine, distance, opening hours, budget
+    if (seen[x.id] === 1) score *= 0.6; // been there: still possible, but somewhere new comes first
     const split = n > 1 ? shareList(x, seeds) || (sum > 0 ? percents(v.map((y) => y / sum)) : null) : null;
     const present = r.filter(Boolean).length;
     const reason = n === 1 ? 'A strong match for your taste.'
@@ -108,7 +109,7 @@ export function bridgeN(lists, joint, { seeds = [], take = 4, city = '', fits = 
       : jr ? `In Qloo’s combined-taste list for the ${n === 2 ? 'pair' : 'group'}.`
       : n === 2 ? 'A strong pick for one person.' : `A strong pick for ${present} of ${n} people.`;
     const fit = occasionFit(x.categories, fits);
-    return { id: x.id, name: x.name, address: x.address, category: (x.categories?.[0] || '').replace(/_/g, ' '), ...placeDetails(x), ...extra(x), ranks: r, aRank: r[0], bRank: r[1] ?? null, jointRank: jr, shares: split, share: asPair(split), mainstream, fit, reason, score };
+    return { id: x.id, name: x.name, address: x.address, category: (x.categories?.[0] || '').replace(/_/g, ' '), ...placeDetails(x), ...extra(x), been: seen[x.id] === 1, ranks: r, aRank: r[0], bRank: r[1] ?? null, jointRank: jr, shares: split, share: asPair(split), mainstream, fit, reason, score };
   }).sort((x, y) => y.score - x.score)
     .filter((x, i, all) => all.findIndex((y) => y.name.toLowerCase() === x.name.toLowerCase()) === i)
     .slice(0, take)
@@ -230,6 +231,7 @@ export const seedSummary = (seeds, names = []) => seeds.map((s, i) => ({ id: s.i
 
 export async function plan(input, key, origin = ORIGIN, onStep = () => {}) {
   const { favorites, names, city, occasion } = parseInput(input);
+  const seen = input?.seen && typeof input.seen === 'object' ? input.seen : {};
   const occ = OCCASIONS[occasion];
   const steps = [];
   const step = (id, label, detail) => { const s = { id, label, detail }; steps.push(s); onStep(s); };
@@ -252,7 +254,7 @@ export async function plan(input, key, origin = ORIGIN, onStep = () => {}) {
       n > 1 ? insights({ ...base, 'signal.interests.entities': ids.join(','), 'feature.explainability': 'true' }, key, origin) : Promise.resolve([]),
     ]);
     // Rank a wider pool, then drop places that are clearly the wrong kind when enough right ones exist.
-    const pool = bridgeN(lists, joint, { seeds: ids, city, fits: occ.fits, take: 12 });
+    const pool = bridgeN(lists, joint, { seeds: ids, city, fits: occ.fits, take: 12, seen });
     // Places that are mainly the right kind lead; the rest keep their fairness order behind them.
     const suited = pool.filter((p) => p.fit >= 0.75 && inCity(p.address, cityKey(city))).sort((x, y) => (y.fit === 1) - (x.fit === 1));
     const found = (suited.length >= 3 ? suited : pool).slice(0, 4);

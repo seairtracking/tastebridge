@@ -393,3 +393,67 @@ test("rooms never reveal the host's location and reject oversized bodies", async
   const big = await host("/api/account/login", { method: "POST", body: { username: "x", password: "y".repeat(5000) } });
   assert.equal(big.status, 413);
 });
+
+test("recovery codes reset a forgotten password once; changing a password signs out other devices", async () => {
+  const env = { QLOO_API_KEY: "k", STORE: openStore(":memory:") };
+  const phone = client(env), laptop = client(env), thief = client(env);
+  const up = await phone("/api/account/signup", { method: "POST", body: { username: "hoa", password: "first password", display: "Hoa" } });
+  const code = up.data.recoveryCode;
+  assert.match(code, /^[A-Z0-9]{4}(-[A-Z0-9]{4}){3}$/);
+  await laptop("/api/account/login", { method: "POST", body: { username: "hoa", password: "first password" } });
+  assert.equal((await thief("/api/account/recover", { method: "POST", body: { username: "hoa", code: "AAAA-BBBB-CCCC-DDDD", password: "stolen pass" } })).status, 401);
+  const rec = await phone("/api/account/recover", { method: "POST", body: { username: "hoa", code: code.toLowerCase(), password: "second password" } });
+  assert.equal(rec.status, 200);
+  assert.notEqual(rec.data.recoveryCode, code);
+  assert.equal((await laptop("/api/account")).data.user, null); // signed out everywhere else
+  assert.equal((await phone("/api/account/recover", { method: "POST", body: { username: "hoa", code, password: "third password" } })).status, 401); // one use only
+  assert.equal((await phone("/api/account/password", { method: "POST", body: { current: "wrong", password: "fourth password" } })).status, 401);
+  assert.equal((await phone("/api/account/password", { method: "POST", body: { current: "second password", password: "fourth password" } })).status, 200);
+  assert.equal((await phone("/api/account")).data.user.username, "hoa"); // this device stays signed in
+});
+
+test("places you have been: marked and moved down, places rated 👎 never come back, plans are saved", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fakeQloo().fetch;
+  try {
+    const env = { QLOO_API_KEY: "k", STORE: openStore(":memory:") };
+    const me = client(env);
+    await me("/api/account/signup", { method: "POST", body: { username: "tuan", password: "a good password", display: "Tuan" } });
+    const body = { first: "Radiohead", second: "Lady Bird", city: "Hanoi", occasion: "coffee" };
+    const first = await me("/api/plan", { method: "POST", body });
+    const [top, second] = first.data.places;
+    await me("/api/account/visits", { method: "POST", body: { place: top } });
+    await me("/api/account/visits", { method: "POST", body: { place: { ...second, id: "not-a-uuid" } } }); // rejected quietly by validation
+    const acct = (await me("/api/account")).data;
+    assert.equal(acct.visits.length, 1);
+    assert.ok(acct.plans.length >= 1);
+    const again = await me("/api/plan", { method: "POST", body });
+    assert.equal(again.data.places.find((p) => p.id === top.id)?.been, true);
+    await me("/api/account/visits/rate", { method: "POST", body: { id: acct.visits[0].id, rating: -1 } });
+    const third = await me("/api/plan", { method: "POST", body });
+    assert.equal(third.data.places.some((p) => p.id === top.id), false);
+    const saved = await me("/api/account/plans/" + acct.plans[0].id);
+    assert.ok(saved.data.plan.places.length);
+    assert.equal((await me("/api/account/plans/999")).status, 404);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("how was it: a past plan asks once, and the answer fills your places", async () => {
+  let t = 1_800_000_000_000;
+  const env = { QLOO_API_KEY: "k", STORE: openStore(":memory:", () => t) };
+  const me = client(env);
+  await me("/api/account/signup", { method: "POST", body: { username: "linh", password: "a good password", display: "Linh" } });
+  const user = env.STORE.userByName("linh");
+  const place = { id: "00000000-0000-4000-8000-000000000070", name: "Sushi Place", address: "1 Main St" };
+  env.STORE.savePlanFor(user.id, "Tonight · New York", { stops: [{ slot: "dinner", options: [place] }], seeds: [{ person: "Linh" }, { person: "Bao" }] });
+  assert.equal((await me("/api/account")).data.review, null);
+  t += 4 * 3600000;
+  const review = (await me("/api/account")).data.review;
+  assert.equal(review.title, "Tonight · New York");
+  await me("/api/account/review", { method: "POST", body: { id: review.id, went: [{ id: place.id, rating: 1 }, { id: "00000000-0000-4000-8000-000000000999" }] } });
+  const after = (await me("/api/account")).data;
+  assert.equal(after.review, null);
+  assert.deepEqual(after.visits.map((v) => [v.name, v.withName, v.rating]), [["Sushi Place", "Bao", 1]]);
+});

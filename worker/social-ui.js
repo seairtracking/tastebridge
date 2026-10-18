@@ -24,8 +24,18 @@ function authSheet(tab){sheet(function(box){box.append(text('h3',null,tab==='sig
   var f=document.createElement('form');var u=input('text','',{autocomplete:'username',maxlength:'20',required:''}),p=input('password','',{autocomplete:tab==='signup'?'new-password':'current-password',minlength:'8',required:''}),d=input('text','',{maxlength:'40'});
   f.append(field('Username',u));if(tab==='signup')f.append(field('Display name',d));f.append(field('Password',p));var err=errorLine();f.append(err);
   var row=text('div','bar-row');row.append(btn('Cancel','btn',function(){dialog.close()}));var go=text('button','btn primary',tab==='signup'?'Create account':'Sign in');go.type='submit';row.append(go);f.append(row);
-  f.addEventListener('submit',function(e){e.preventDefault();go.disabled=true;api('/api/account/'+(tab==='signup'?'signup':'login'),{method:'POST',body:{username:u.value,password:p.value,display:d.value}}).then(function(){return refreshAccount()}).then(function(){dialog.close();if(tab==='signup')profileSheet()}).catch(function(x){err.textContent=x.message}).finally(function(){go.disabled=false})});
-  box.append(f);setTimeout(function(){u.focus()},50)})}
+  f.addEventListener('submit',function(e){e.preventDefault();go.disabled=true;var code=null;api('/api/account/'+(tab==='signup'?'signup':'login'),{method:'POST',body:{username:u.value,password:p.value,display:d.value}}).then(function(r){code=r.recoveryCode;return refreshAccount()}).then(function(){if(code)codeSheet(code,true);else dialog.close()}).catch(function(x){err.textContent=x.message}).finally(function(){go.disabled=false})});
+  box.append(f);if(tab!=='signup'){var forgot=btn('Forgot password?','vote',function(){recoverSheet()});forgot.style.marginTop='8px';box.append(forgot)}setTimeout(function(){u.focus()},50)})}
+
+function codeSheet(code,fresh){sheet(function(box){box.append(text('h3',null,'Save your recovery code'),text('p','muted','If you forget your password, this code lets you set a new one. It is shown only once. Keep it in your notes, a screenshot or a password manager.'));
+  var c=text('p','link',code);c.style.fontSize='20px';c.style.textAlign='center';c.style.letterSpacing='.08em';box.append(c);
+  var row=text('div','bar-row');row.append(btn('Copy code','btn',function(e){navigator.clipboard&&navigator.clipboard.writeText(code).then(function(){e.target.textContent='Copied ✓'})}),btn('I saved it','btn primary',function(){fresh?profileSheet():dialog.close()}));box.append(row)})}
+
+function recoverSheet(){sheet(function(box){box.append(text('h3',null,'Forgot password'),text('p','muted','Enter your username, the recovery code you saved when you signed up, and a new password. Every other device will be signed out.'));
+  var f=document.createElement('form');var u=input('text','',{autocomplete:'username',maxlength:'20',required:''}),c=input('text','',{placeholder:'XXXX-XXXX-XXXX-XXXX',maxlength:'40',required:'',autocomplete:'off'}),p=input('password','',{autocomplete:'new-password',minlength:'8',required:''});
+  f.append(field('Username',u),field('Recovery code',c),field('New password',p));var err=errorLine();f.append(err);var row=text('div','bar-row');row.append(btn('Back','btn',function(){authSheet('login')}));var go=text('button','btn primary','Set new password');go.type='submit';row.append(go);f.append(row);
+  f.addEventListener('submit',function(e){e.preventDefault();go.disabled=true;var code;api('/api/account/recover',{method:'POST',body:{username:u.value,code:c.value,password:p.value}}).then(function(r){code=r.recoveryCode;return refreshAccount()}).then(function(){codeSheet(code,false)}).catch(function(x){err.textContent=x.message}).finally(function(){go.disabled=false})});
+  box.append(f)})}
 
 function profileSheet(){refreshAccount().then(function(d){if(!me)return authSheet('login');sheet(function(box){
   box.append(text('h3',null,'Hi, '+me.display),text('p','muted','@'+me.username+' · Your favorite is shared only with friends who accept you.'));
@@ -49,6 +59,21 @@ function profileSheet(){refreshAccount().then(function(d){if(!me)return authShee
   (d.invites||[]).forEach(function(r){var li=text('li');li.append(text('span',null,r.host+' invited you'),btn('Open','vote',function(){location.href='/r/'+r.id}));pl.append(li)});
   (d.rooms||[]).forEach(function(r){var li=text('li');li.append(text('span',null,(r.other?'With '+r.other:'Waiting for your friend')+(r.planned?' · planned':'')),btn('Open','vote',function(){location.href='/r/'+r.id}));pl.append(li)});
   if(!pl.childNodes.length)pl.append(text('li','muted','Plans you make on two phones appear here for 48 hours.'));ps.append(pl);box.append(ps);
+  // places you've been
+  var vs=text('section');vs.append(text('h4',null,'Places you’ve been'),text('p','muted','Tap “Been here ✓” on a plan, or answer “How was it?” after a night out. TasteBridge then suggests somewhere new first and never suggests places you marked 👎 again.'));var vl=text('ul','list');
+  (d.visits||[]).forEach(function(v){var li=text('li');var info=text('span',null,v.name);info.append(text('span','muted',' · '+new Date(v.visited).toLocaleDateString()+(v.withName?' · with '+v.withName:'')));li.append(info);var act=text('span');
+    [[1,'❤️'],[-1,'👎']].forEach(function(o){var b=btn(o[1],'vote',function(){api('/api/account/visits/rate',{method:'POST',body:{id:v.id,rating:v.rating===o[0]?0:o[0]}}).then(profileSheet)});b.setAttribute('aria-pressed',String(v.rating===o[0]));b.setAttribute('aria-label',o[0]>0?'Loved it':'Not for us');act.append(b)});
+    act.append(btn('✕','vote',function(){api('/api/account/visits/remove',{method:'POST',body:{id:v.id}}).then(profileSheet)}));li.append(act);vl.append(li)});
+  if(!(d.visits||[]).length)vl.append(text('li','muted','Nothing yet.'));vs.append(vl);box.append(vs);
+  // saved plans
+  var sp=text('section');sp.append(text('h4',null,'Saved plans'));var sl=text('ul','list');
+  (d.plans||[]).forEach(function(pl){var li=text('li');li.append(text('span',null,pl.title+' · '+new Date(pl.created).toLocaleDateString()));var act=text('span');act.append(btn('Open','vote',function(){api('/api/account/plans/'+pl.id).then(function(r){dialog.close();show(r.plan)})}),btn('✕','vote',function(){api('/api/account/plans/remove',{method:'POST',body:{id:pl.id}}).then(profileSheet)}));li.append(act);sl.append(li)});
+  if(!(d.plans||[]).length)sl.append(text('li','muted','Plans you make while signed in are kept here (the latest 30).'));sp.append(sl);box.append(sp);
+  // password and recovery
+  var sec=text('section');sec.append(text('h4',null,'Password'));var pf=document.createElement('form');var cur=input('password','',{autocomplete:'current-password',placeholder:'Current password'}),nxt=input('password','',{autocomplete:'new-password',minlength:'8',placeholder:'New password'});var perr=errorLine();var prow=text('div','bar-row');var pgo=text('button','btn','Change password');pgo.type='submit';
+  prow.append(btn('New recovery code','btn',function(){var pw=prompt('Type your password to get a new recovery code.');if(!pw)return;api('/api/account/recovery-code',{method:'POST',body:{password:pw}}).then(function(r){codeSheet(r.recoveryCode,false)}).catch(function(x){perr.textContent=x.message})}),pgo);
+  pf.append(cur,nxt,perr,prow);cur.style.marginBottom='8px';pf.addEventListener('submit',function(e){e.preventDefault();api('/api/account/password',{method:'POST',body:{current:cur.value,password:nxt.value}}).then(function(){perr.textContent='Password changed. Other devices were signed out.';cur.value='';nxt.value=''}).catch(function(x){perr.textContent=x.message})});
+  sec.append(pf);box.append(sec);
   // sign out, delete
   var end=text('section');var row3=text('div','bar-row');
   row3.append(btn('Delete account','btn',function(){var pw=prompt('Type your password to delete your account and all its data.');if(!pw)return;api('/api/account/delete',{method:'POST',body:{password:pw}}).then(function(){dialog.close();location.reload()}).catch(function(x){alert(x.message)})}));
@@ -90,7 +115,18 @@ function runRoomPlan(e){if(planning)return;planning=true;e.target.disabled=true;
 function decorateVotes(v){document.querySelectorAll('#results [data-option]').forEach(function(card){var id=card.dataset.option;if(!id)return;var old=card.querySelector('.votes');if(old)old.remove();var t=v.votes[id]||{up:0,down:0,mine:0};var row=text('div','votes');
   [[1,'👍 '+t.up],[-1,'👎 '+t.down]].forEach(function(o){var b=btn(o[1],'vote',function(){api('/api/rooms/'+roomId+'/vote',{method:'POST',body:{option:id,value:t.mine===o[0]?0:o[0]}}).then(load)});b.setAttribute('aria-pressed',String(t.mine===o[0]));b.setAttribute('aria-label',(o[0]>0?'Like ':'Dislike ')+'this option');row.append(b)});card.append(row)})}
 
+var lastPlan=null,pageShow=window.show;
+window.show=function(plan){pageShow(plan);lastPlan=plan;decorateBeen(plan)};
+function placeOf(plan,id){var all=(plan.places||[]).concat((plan.stops||[]).reduce(function(a,s){return a.concat(s.options)},[]));for(var i=0;i<all.length;i++)if(all[i].id===id)return all[i];return null}
+function decorateBeen(plan){if(!me)return;document.querySelectorAll('#places [data-option]').forEach(function(card){var place=placeOf(plan,card.dataset.option);if(!place||card.querySelector('.been'))return;var b=btn(place.been?'Been here ✓':'Been here?','vote been',function(){var withName=(plan.seeds||[]).map(function(x){return x.person}).filter(function(n){return n&&n!==me.display}).join(', ');api('/api/account/visits',{method:'POST',body:{place:place,with:withName}}).then(function(){b.textContent='Been here ✓';b.setAttribute('aria-pressed','true')})});b.setAttribute('aria-pressed',String(!!place.been));b.style.marginTop='8px';card.append(b)})}
+function reviewBox(r){var box=el('review');if(!box){box=text('div','room');box.id='review';roomBox.parentNode.insertBefore(box,roomBox)}box.hidden=false;box.replaceChildren();
+  var options=(r.plan.stops?r.plan.stops.reduce(function(a,s){return a.concat(s.options.slice(0,3))},[]):(r.plan.places||[]));var picked={};
+  box.append(text('div','step','How was it?'),text('h3',null,'Where did you go for “'+r.title+'”?'),text('p',null,'Tap the places you went to. TasteBridge remembers them and suggests somewhere new next time.'));
+  var row=text('div','people');options.forEach(function(o){var b=btn(o.name,'vote',function(){picked[o.id]=picked[o.id]?0:1;b.setAttribute('aria-pressed',String(!!picked[o.id]))});b.setAttribute('aria-pressed','false');row.append(b)});box.append(row);
+  var act=text('div','row');act.append(btn('Save','btn primary',function(){send(Object.keys(picked).filter(function(k){return picked[k]}).map(function(k){return{id:k}}))}),btn('We didn’t go','btn',function(){send([])}));box.append(act);
+  function send(went){api('/api/account/review',{method:'POST',body:{id:r.id,went:went}}).then(function(){box.replaceChildren(text('p',null,went.length?'Saved. Thanks!':'Okay, noted.'));setTimeout(function(){box.hidden=true},2500)})}}
+
 var m=/^\/r\/([a-z0-9]{6,16})$/.exec(location.pathname);
-refreshAccount().then(function(){if(m)openRoom(m[1])});
+refreshAccount().then(function(d){if(m)openRoom(m[1]);else if(d&&d.review)reviewBox(d.review)});
 window.addEventListener('popstate',function(){var x=/^\/r\/([a-z0-9]{6,16})$/.exec(location.pathname);if(x)openRoom(x[1]);else{clearInterval(poll);roomBox.hidden=true;hideForm(false)}});
 })();`;

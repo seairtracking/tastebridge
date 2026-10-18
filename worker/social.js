@@ -3,7 +3,7 @@
 import { tidy } from './qloo.js';
 import { CUISINES, MOODS, SPECIALS } from './evening.js';
 import { OCCASIONS } from './engine.js';
-import { SESSION_DAYS } from './store.js';
+const SESSION_DAYS = 30; // matches store.js; kept here so the router never loads node:sqlite
 
 const COOKIE = 'tb_session';
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers } });
@@ -16,6 +16,7 @@ function cookie(request, name) {
   }
   return null;
 }
+export const sessionUser = (request, store) => (store ? store.sessionUser(cookie(request, COOKIE)) : null);
 const sessionCookie = (value, maxAge) => `${COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
 
 // State-changing requests must come from this site (the session cookie is also SameSite=Lax).
@@ -43,8 +44,17 @@ const cleanSettings = (s = {}) => {
   };
 };
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const webUrl = (u) => { try { const x = new URL(String(u)); return x.protocol === 'https:' || x.protocol === 'http:' ? x.href.slice(0, 500) : null; } catch { return null; } };
+function cleanPlace(p) {
+  if (!p || !UUID.test(String(p.id || '')) || !tidy(p.name, 100)) return null;
+  return { id: String(p.id), name: tidy(p.name, 100), address: tidy(p.address, 140), category: tidy(p.category, 60), image: p.image ? webUrl(p.image) : null, map: p.map ? webUrl(p.map) : null };
+}
+
 // Every option in a plan that people can vote on, keyed by its Qloo id.
 const optionIds = (plan) => new Set([...(plan?.places || []), ...(plan?.stops || []).flatMap((s) => s.options), ...(plan?.films || [])].map((x) => x.id));
+
+export const planTitle = (plan, withName) => [plan.specialLabel || plan.occasionLabel || 'Plan', plan.city, withName ? 'with ' + withName : ''].filter(Boolean).join(' · ');
 
 export async function handleSocial(request, env, { allow, runPlan }) {
   const url = new URL(request.url);
@@ -72,9 +82,9 @@ export async function handleSocial(request, env, { allow, runPlan }) {
       const display = tidy(body.display, 40) || username;
       if (!USERNAME.test(username)) return fail('Usernames are 3 to 20 letters, numbers, dots or underscores.');
       if (password.length < 8 || password.length > 200) return fail('Use a password of at least 8 characters.');
-      let user;
-      try { user = store.createUser({ username, password, display }); } catch (e) { return fail(e.message, 409); }
-      return json({ user }, 200, { 'set-cookie': sessionCookie(store.startSession(user.id), SESSION_DAYS * 86400) });
+      let made;
+      try { made = store.createUser({ username, password, display }); } catch (e) { return fail(e.message, 409); }
+      return json({ user: made.user, recoveryCode: made.recoveryCode }, 200, { 'set-cookie': sessionCookie(store.startSession(made.user.id), SESSION_DAYS * 86400) });
     }
     if (action === 'login' && request.method === 'POST') {
       const username = tidy(body.username, 20);
@@ -83,13 +93,21 @@ export async function handleSocial(request, env, { allow, runPlan }) {
       if (!user) return fail('Wrong username or password.', 401);
       return json({ user }, 200, { 'set-cookie': sessionCookie(store.startSession(user.id), SESSION_DAYS * 86400) });
     }
+    if (action === 'recover' && request.method === 'POST') {
+      const username = tidy(body.username, 20), password = typeof body.password === 'string' ? body.password : '';
+      if (!allow(request, 5, 'recover') || !allow(request, 5, 'recover:' + username.toLowerCase())) return fail('Too many attempts. Try again in a few minutes.', 429);
+      if (password.length < 8 || password.length > 200) return fail('Use a new password of at least 8 characters.');
+      const done = store.recover(username, typeof body.code === 'string' ? body.code.slice(0, 40) : '', password);
+      if (!done) return fail('That username and recovery code do not match.', 401);
+      return json({ user: done.user, recoveryCode: done.recoveryCode }, 200, { 'set-cookie': sessionCookie(store.startSession(done.user.id), SESSION_DAYS * 86400) });
+    }
     if (action === 'logout' && request.method === 'POST') {
       store.endSession(sessionToken);
       return json({ ok: true }, 200, { 'set-cookie': sessionCookie('', 0) });
     }
     if (action === '' && request.method === 'GET') {
       if (!me) return json({ user: null });
-      return json({ user: me, friends: store.friendsOf(me.id), invites: store.invitesFor(me.id), rooms: store.roomsOf(me.id) });
+      return json({ user: me, friends: store.friendsOf(me.id), invites: store.invitesFor(me.id), rooms: store.roomsOf(me.id), visits: store.visitsOf(me.id), plans: store.plansOf(me.id), review: store.pendingReview(me.id) });
     }
     if (!me) return fail('Please sign in.', 401);
     if (action === 'profile' && request.method === 'PUT') {
@@ -109,6 +127,53 @@ export async function handleSocial(request, env, { allow, runPlan }) {
       }
       if (action === 'friends/accept') return json({ ok: store.acceptFriend(me.id, other.id) });
       if (action === 'friends/remove') return json({ ok: store.removeFriend(me.id, other.id) });
+    }
+    if (action === 'password' && request.method === 'POST') {
+      const next = typeof body.password === 'string' ? body.password : '';
+      if (next.length < 8 || next.length > 200) return fail('Use a new password of at least 8 characters.');
+      if (!allow(request, 10, 'password')) return fail('Too many attempts. Try again later.', 429);
+      if (!store.changePassword(me.id, typeof body.current === 'string' ? body.current.slice(0, 200) : '', next, sessionToken)) return fail('Your current password is wrong.', 401);
+      return json({ ok: true });
+    }
+    if (action === 'recovery-code' && request.method === 'POST') {
+      if (!store.checkUserPassword(me.id, typeof body.password === 'string' ? body.password.slice(0, 200) : '')) return fail('Wrong password.', 401);
+      return json({ recoveryCode: store.newRecoveryCode(me.id) });
+    }
+    if (action === 'visits' && request.method === 'POST') {
+      const place = cleanPlace(body.place);
+      if (!place) return fail('Unknown place.');
+      store.addVisit(me.id, place, tidy(body.with, 40));
+      return json({ ok: true });
+    }
+    if (action === 'visits/rate' && request.method === 'POST') {
+      const rating = Number(body.rating);
+      if (![-1, 0, 1].includes(rating)) return fail('Unknown rating.');
+      return json({ ok: store.rateVisit(me.id, Number(body.id), rating) });
+    }
+    if (action === 'visits/remove' && request.method === 'POST') return json({ ok: store.removeVisit(me.id, Number(body.id)) });
+    if (action.startsWith('plans/') && request.method === 'GET') {
+      const plan = store.savedPlan(me.id, Number(action.slice(6)));
+      return plan ? json({ plan }) : fail('Plan not found.', 404);
+    }
+    if (action === 'plans/remove' && request.method === 'POST') return json({ ok: store.removePlan(me.id, Number(body.id)) });
+    // "How was it?": record which places from a past plan you went to, then stop asking about it.
+    if (action === 'review' && request.method === 'POST') {
+      const plan = store.savedPlan(me.id, Number(body.id));
+      if (!plan) return fail('Plan not found.', 404);
+      const options = new Map([...(plan.places || []), ...(plan.stops || []).flatMap((x) => x.options)].map((x) => [x.id, x]));
+      const other = (plan.seeds || []).map((x) => x.person).filter((n) => n && n !== me.display).join(', ');
+      for (const w of Array.isArray(body.went) ? body.went.slice(0, 12) : []) {
+        const place = options.get(String(w?.id || ''));
+        if (!place) continue;
+        store.addVisit(me.id, cleanPlace(place), other);
+        const rating = Number(w.rating);
+        if (rating === 1 || rating === -1) {
+          const v = store.visitsOf(me.id, 200).find((x) => x.placeId === place.id);
+          if (v) store.rateVisit(me.id, v.id, rating);
+        }
+      }
+      store.markReviewed(me.id, Number(body.id));
+      return json({ ok: true });
     }
     if (action === 'delete' && request.method === 'POST') {
       if (!store.checkUserPassword(me.id, typeof body.password === 'string' ? body.password.slice(0, 200) : '')) return fail('Wrong password.', 401);
@@ -184,10 +249,14 @@ export async function handleSocial(request, env, { allow, runPlan }) {
       if (room.members.length < 2) return fail('Wait for your friend to join first.', 409);
       const s = room.settings;
       const input = {
+        seen: store.seenBy(room.members.map((m) => m.userId)),
         favorites: room.members.map((m) => m.favorite), names: room.members.map((m) => m.name),
         city: s.city, lat: s.lat, lon: s.lon, start: s.start, day: s.day, cuisine: s.cuisine, mood: s.mood, budget: s.budget, occasion: s.occasion, special: s.special,
       };
-      return runPlan(s.mode, input, request, (result) => store.savePlan(room.id, { ...result, room: room.id }));
+      return runPlan(s.mode, input, request, (result) => {
+        store.savePlan(room.id, { ...result, room: room.id });
+        for (const m of room.members) if (m.userId) store.savePlanFor(m.userId, planTitle(result, room.members.find((o) => o.slot !== m.slot)?.name), { ...result, room: room.id });
+      });
     }
     return fail('Not found.', 404);
   }
