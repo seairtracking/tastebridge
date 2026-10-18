@@ -39,6 +39,7 @@ export function entity(item) {
     // Evening planning: the feel of the place, its cuisines, live music and opening hours.
     ambience: tagNames(tags, 'urn:tag:ambience:qloo:'),
     cuisines: tagNames(tags, 'urn:tag:genre:place:restaurant:'),
+    goodFor: tagNames(tags, 'urn:tag:good_for:qloo:'),
     liveMusic: p.live_music === true || p.live_music === 'true',
     hours: p.hours && typeof p.hours === 'object' ? p.hours : null,
   };

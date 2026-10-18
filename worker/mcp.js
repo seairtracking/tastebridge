@@ -1,7 +1,7 @@
 // Minimal MCP server (Streamable HTTP, JSON responses) so AI agents such as Claude or ChatGPT
 // can call TasteBridge as a tool. Stateless: every POST /mcp carries one JSON-RPC message or a batch.
 import { plan, OCCASIONS } from './engine.js';
-import { evening, CUISINES, MOODS } from './evening.js';
+import { evening, CUISINES, MOODS, SPECIALS } from './evening.js';
 import { searchEntities, kind } from './qloo.js';
 
 const PROTOCOL = '2025-06-18';
@@ -11,16 +11,18 @@ const TOOLS = [
   {
     name: 'find_common_ground',
     title: 'Find common ground for two tastes',
-    description: 'Plan an outing for two people with different cultural tastes. Give one favorite from each person (an artist, film, book, TV show or game) and a city. TasteBridge uses the Qloo taste graph to find places that fit each person and both together, refines the search when there is too little overlap, and returns a fair shortlist: each place shows how much it is driven by each person (Qloo explainability), plus films that sit between both tastes. Use it when friends, couples or groups disagree about where to go.',
+    description: 'Plan an outing for one to four people (solo, a pair or a group) with different cultural tastes. Give one favorite from each person (an artist, film, book, TV show or game) and a city. TasteBridge uses the Qloo taste graph to find places that fit each person and both together, refines the search when there is too little overlap, and returns a fair shortlist: each place shows how much it is driven by each person (Qloo explainability), plus films that sit between both tastes. Use it when friends, couples or groups disagree about where to go.',
     inputSchema: {
       type: 'object',
       properties: {
+        favorites: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 4, description: 'One favorite per person, 1 to 4 people (an artist, film, book, TV show or game). Use this for a solo plan or a group.' },
+        names: { type: 'array', items: { type: 'string' }, maxItems: 4, description: 'Optional display names in the same order as favorites, e.g. ["Me", "Lan"].' },
         first: { type: 'string', description: 'Person one’s favorite: an artist, film, book, TV show or game, e.g. "Spirited Away".' },
         second: { type: 'string', description: 'Person two’s favorite, e.g. "Daft Punk".' },
         city: { type: 'string', description: 'City to explore, e.g. "New York" or "Ho Chi Minh City".' },
         occasion: { type: 'string', enum: Object.keys(OCCASIONS), description: 'Kind of outing. Defaults to dinner.' },
       },
-      required: ['first', 'second', 'city'],
+      required: ['city'],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
@@ -28,10 +30,12 @@ const TOOLS = [
   {
     name: 'plan_evening',
     title: 'Plan a whole evening for two',
-    description: 'Plan an evening for two people after work: dinner that fits both tastes (optionally a cuisine, a mood and a budget), a second stop within walking distance, a live music or show venue nearby, and a film for home. Every stop is ranked for fairness with Qloo explainability, with photos, ratings, price level, map and website links, walking time and opening hours where Qloo has them. Give a city, or a latitude and longitude for "near me". Qloo has no event listings, so show venues link to their own programme.',
+    description: 'Plan an evening after work for one to four people (solo, a pair or a group): dinner that fits both tastes (optionally a cuisine, a mood and a budget), a second stop within walking distance, a live music or show venue nearby, and a film for home. Every stop is ranked for fairness with Qloo explainability, with photos, ratings, price level, map and website links, walking time and opening hours where Qloo has them. Give a city, or a latitude and longitude for "near me". Qloo has no event listings, so show venues link to their own programme.',
     inputSchema: {
       type: 'object',
       properties: {
+        favorites: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 4, description: 'One favorite per person, 1 to 4 people (an artist, film, book, TV show or game). Use this for a solo plan or a group.' },
+        names: { type: 'array', items: { type: 'string' }, maxItems: 4, description: 'Optional display names in the same order as favorites, e.g. ["Me", "Lan"].' },
         first: { type: 'string', description: 'Person one’s favorite: an artist, film, book, TV show or game.' },
         second: { type: 'string', description: 'Person two’s favorite.' },
         city: { type: 'string', description: 'City to plan in. Optional when lat and lon are given.' },
@@ -41,9 +45,10 @@ const TOOLS = [
         day: { type: 'string', enum: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'], description: 'Day of the week, used to check opening hours.' },
         cuisine: { type: 'string', enum: CUISINES, description: 'What to eat.' },
         mood: { type: 'string', enum: MOODS, description: 'The feel of the evening.' },
+        special: { type: 'string', enum: Object.keys(SPECIALS), description: 'A special occasion: birthday, anniversary, first date, date night, celebration, friends reunion, family or business dinner.' },
         budget: { type: 'integer', minimum: 1, maximum: 4, description: 'Highest price level, 1 ($) to 4 ($$$$).' },
       },
-      required: ['first', 'second'],
+      required: [],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
@@ -62,16 +67,21 @@ const TOOLS = [
   },
 ];
 
+// Labels and share text for one to four people.
+const label = (p, i) => p.seeds[i].person || p.seeds[i].name;
+const forWhom = (p) => (p.seeds.length === 1 ? `a fan of ${p.seeds[0].name}` : p.seeds.map((s) => `a fan of ${s.name}`).join(p.seeds.length === 2 ? ' and ' : ', '));
+const pctOf = (p) => (x) => (x?.shares ? ` (${x.shares.map((v, i) => `${v}% ${label(p, i)}`).join(' / ')})` : '');
+
 function summary(p) {
-  const pct = (s) => (s ? ` (${s.a}% ${p.seeds[0].name} / ${s.b}% ${p.seeds[1].name})` : '');
+  const pct = pctOf(p);
   const lines = [
-    `${p.occasionLabel} in ${p.city} for a fan of ${p.seeds[0].name} and a fan of ${p.seeds[1].name}:`,
+    `${p.occasionLabel} in ${p.city} for ${forWhom(p)}:`,
     ...p.places.map((x, i) => {
       const facts = [x.category, x.rating ? `★${x.rating}` : '', x.price ? '$'.repeat(x.price) : ''].filter(Boolean).join(', ');
       const links = [x.map && `map: ${x.map}`, x.website && `website: ${x.website}`].filter(Boolean).join(' · ');
-      return `${i + 1}. ${x.name}${facts ? ` [${facts}]` : ''}${x.address ? ` — ${x.address}` : ''}${pct(x.share)}. ${x.reason}${links ? ` (${links})` : ''}`;
+      return `${i + 1}. ${x.name}${facts ? ` [${facts}]` : ''}${x.address ? ` — ${x.address}` : ''}${pct(x)}. ${x.reason}${links ? ` (${links})` : ''}`;
     }),
-    `Watch together: ${p.films.map((f) => f.name + (f.year ? ` (${f.year})` : '') + pct(f.share)).join('; ') || 'no film found'}. ${p.filmNote}`,
+    `${p.seeds.length === 1 ? 'Watch' : 'Watch together'}: ${p.films.map((f) => f.name + (f.year ? ` (${f.year})` : '') + pct(f)).join('; ') || 'no film found'}. ${p.filmNote}`,
     ...(p.warning ? [`Note: ${p.warning}`] : []),
     `How the agent decided: ${p.steps.map((s) => s.detail).join(' ')}`,
   ];
@@ -79,16 +89,17 @@ function summary(p) {
 }
 
 function eveningSummary(p) {
-  const pct = (s) => (s ? ` (${s.a}% ${p.seeds[0].name} / ${s.b}% ${p.seeds[1].name})` : '');
+  const pct = pctOf(p);
   const place = (x) => {
     const facts = [x.category, x.rating ? `★${x.rating}` : '', x.price ? '$'.repeat(x.price) : '', x.walk ? `${x.walk.minutes} min walk` : '', x.open === 'open' ? 'open then' : '', x.liveMusic ? 'live music' : ''].filter(Boolean).join(', ');
     const links = [x.map && `map: ${x.map}`, x.website && `website: ${x.website}`].filter(Boolean).join(' · ');
-    return `${x.name}${facts ? ` [${facts}]` : ''}${pct(x.share)}${links ? ` (${links})` : ''}`;
+    return `${x.name}${facts ? ` [${facts}]` : ''}${pct(x)}${links ? ` (${links})` : ''}`;
   };
   return [
-    `An evening ${p.city === 'near you' ? 'near you' : 'in ' + p.city} from ${p.start} for a fan of ${p.seeds[0].name} and a fan of ${p.seeds[1].name}${p.cuisine ? `, ${p.cuisine} food` : ''}${p.mood ? `, ${p.mood} mood` : ''}:`,
+    `An evening ${p.city === 'near you' ? 'near you' : 'in ' + p.city} from ${p.start} for ${forWhom(p)}${p.cuisine ? `, ${p.cuisine} food` : ''}${p.mood ? `, ${p.mood} mood` : ''}${p.specialLabel ? `, for a ${p.specialLabel.toLowerCase()}` : ''}:`,
     ...p.stops.map((s) => `${s.time} ${s.title}: ${place(s.options[0])}${s.options.length > 1 ? `. Or: ${s.options.slice(1).map((x) => x.name).join(', ')}` : ''}.`),
-    `Back home: ${p.films.map((f) => f.name + (f.year ? ` (${f.year})` : '') + pct(f.share)).join('; ') || 'no film found'}.`,
+    `Back home: ${p.films.map((f) => f.name + (f.year ? ` (${f.year})` : '') + pct(f)).join('; ') || 'no film found'}.`,
+    ...(p.tip ? [`Tip: ${p.tip}`] : []),
     'Qloo has no event listings, so check the show venue’s website for tonight’s programme.',
     ...(p.warning ? [`Note: ${p.warning}`] : []),
     `How the agent decided: ${p.steps.map((s) => s.detail).join(' ')}`,

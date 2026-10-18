@@ -6,13 +6,14 @@ import { evening, parseEvening } from './evening.js';
 import { handleMcp } from './mcp.js';
 import { page } from './page.js';
 import { appRoute } from './app.js';
+import { handleSocial } from './social.js';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 
 // Two planners share the same routes: the quick shortlist and the "Tonight" evening plan.
 const MODES = {
-  plan: { run: plan, key: (input) => { const q = parseInput(input); return ['plan', q.first, q.second, q.city, q.occasion]; } },
-  evening: { run: evening, key: (input) => { const q = parseEvening(input); return ['evening', q.first, q.second, q.city, q.near?.lat, q.near?.lon, q.start, q.day, q.cuisine, q.mood, q.budget]; } },
+  plan: { run: plan, key: (input) => { const q = parseInput(input); return ['plan', ...q.favorites, '|', ...q.names, q.city, q.occasion]; } },
+  evening: { run: evening, key: (input) => { const q = parseEvening(input); return ['evening', ...q.favorites, '|', ...q.names, q.city, q.near?.lat, q.near?.lon, q.start, q.day, q.cuisine, q.mood, q.budget, q.special]; } },
 };
 
 // Ten-minute result cache, keyed by the normalised request.
@@ -50,7 +51,7 @@ function allow(request, limit = LIMIT, bucket = 'web') {
 const qlooOrigin = (env) => ['https://api.qloo.com', 'https://hackathon.api.qloo.com'].includes(env.QLOO_API_URL) ? env.QLOO_API_URL : ORIGIN;
 
 // Streams agent steps as they happen, then the plan: one JSON object per line.
-function streamPlan(mode, input, key, origin, cached, allowed) {
+function streamPlan(mode, input, key, origin, cached, allowed, onResult = () => {}) {
   const encoder = new TextEncoder();
   const body = new ReadableStream({
     async start(controller) {
@@ -58,6 +59,7 @@ function streamPlan(mode, input, key, origin, cached, allowed) {
       try {
         if (cached) {
           for (const step of cached.steps) send({ event: 'step', step });
+          onResult(cached);
           send({ event: 'result', plan: cached });
         } else if (!allowed()) {
           send({ event: 'error', error: 'Too many plans from this connection. Try again in a few minutes.' });
@@ -65,6 +67,7 @@ function streamPlan(mode, input, key, origin, cached, allowed) {
           const result = await MODES[mode].run(input, key, origin, (step) => send({ event: 'step', step }));
           const k = cacheKey(mode, input);
           if (k) remember(k, result);
+          onResult(result);
           send({ event: 'result', plan: result });
         }
       } catch (error) {
@@ -105,11 +108,24 @@ async function planRoute(mode, request, env) {
 export default {
   async fetch(request, env = {}) {
     const url = new URL(request.url);
-    if (url.pathname === '/') return new Response(page, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=60' } });
+    if (url.pathname === '/' || /^\/r\/[a-z0-9]{6,16}$/.test(url.pathname)) return new Response(page, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=60' } });
     if (url.pathname === '/health') return json({ ok: true });
     if (url.pathname === '/api/status') return json({ live: Boolean(env.QLOO_API_KEY), occasions: Object.keys(OCCASIONS), mcp: url.origin + '/mcp' });
     if (url.pathname === '/api/plan') return planRoute('plan', request, env);
     if (url.pathname === '/api/evening') return planRoute('evening', request, env);
+    if (url.pathname.startsWith('/api/account') || url.pathname.startsWith('/api/rooms')) {
+      return handleSocial(request, env, {
+        allow: (req, limit, bucket) => allow(req, limit, bucket),
+        // Shared plans stream their steps like the guest planner and are saved to the room when done.
+        runPlan: (mode, input, req, save) => {
+          if (!env.QLOO_API_KEY) return json({ error: 'Live Qloo data is not configured yet.' }, 503);
+          const k = cacheKey(mode, input);
+          if (!k) { try { MODES[mode].key(input); } catch (error) { return json({ error: error.message }, 422); } }
+          const hit = k && cache.get(k);
+          return streamPlan(mode, input, env.QLOO_API_KEY, qlooOrigin(env), hit && hit.expires > Date.now() ? hit.value : null, () => allow(req), save);
+        },
+      });
+    }
     const app = appRoute(url.pathname);
     if (app) return app;
     if (url.pathname === '/mcp') return handleMcp(request, env, qlooOrigin(env), () => allow(request, MCP_LIMIT, 'mcp'));

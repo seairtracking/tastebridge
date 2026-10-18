@@ -19,6 +19,9 @@ const ROUTES = {
   '/favicon.ico': () => new Response(png(ICON_192), { headers: { 'content-type': 'image/png', 'cache-control': day } }),
 };
 
+import { socialScript } from './social-ui.js';
+ROUTES['/social.js'] = () => new Response(socialScript, { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' } });
+
 export function appRoute(pathname) {
   return Object.hasOwn(ROUTES, pathname) ? ROUTES[pathname]() : null;
 }

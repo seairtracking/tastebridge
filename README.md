@@ -13,6 +13,16 @@ Two ways to use it:
 - **Tonight's plan:** a timeline for the evening. Pick a start time, what to eat, a mood (romantic,
   cozy, lively, quiet, chill) and a budget, and type a city or tap **Use my location**.
 - **Quick shortlist:** four fair places for one occasion (dinner, drinks, coffee, culture or a night out).
+- **Special occasions:** birthday, anniversary, first date, date night, celebration, friends reunion,
+  family or business dinner. Each one uses Qloo's own "good for" and ambience tags (for example
+  `good_for:anniversary_dinners`, `ambience:family_friendly`), sets a default mood, raises the quality bar
+  for upscale occasions, picks the right kind of second stop, and keeps family evenings away from bars.
+- **Plan on two phones:** one person creates an invite and sends the link. The friend opens it on their
+  own phone and adds their favorite; **neither sees the other's pick until the plan is ready**, so nobody
+  adjusts to the other. Both phones see the same plan and can vote 👍/👎 on every option.
+- **Optional accounts:** keep your favorite, city and usual food and mood in a profile, add friends by
+  username (they must accept), and plan with a friend in one tap: their profile fills their side, and
+  the plan shows up on their phone too. Everything still works without an account.
 
 It runs in the browser and **installs like an app** on iPhone (Share → Add to Home Screen) and Android
 (Install app).
@@ -85,6 +95,24 @@ Tools:
 Try: *"My partner loves Wes Anderson films, I love Arctic Monkeys. Plan us a cozy evening in London from
 6 pm, Italian food, not too expensive."*
 
+## Accounts, rooms and security
+
+Accounts and two-phone rooms are stored in SQLite (`node:sqlite`) in a folder outside the code
+(`TASTEBRIDGE_DB`), so deploys never touch them.
+
+- Passwords are hashed with scrypt and a random salt and compared in constant time; unknown usernames
+  take the same time to reject.
+- Sessions are random 256-bit tokens stored only as SHA-256 hashes, sent in an `HttpOnly; Secure;
+  SameSite=Lax` cookie, and expire after 30 days. Requests that change data must come from the same
+  origin.
+- A friend's favorite is visible only after they accept the friend request. In a room, each person's
+  favorite stays hidden from the other until the plan is made, and the host's location never leaves the
+  server.
+- Rooms expire after 48 hours. Deleting an account (password required) removes the profile, friendships,
+  sessions and the rooms it hosted.
+- Sign-up, sign-in, friend requests and invites are rate limited per connection; request bodies are
+  capped at 4 KB.
+
 ## Reliability
 
 The hackathon key allows only a few requests in flight. TasteBridge queues Qloo calls (at most 3 at a
@@ -102,7 +130,7 @@ not infer anyone's identity or sensitive traits.
 
 ## Run it
 
-Requirements: Node.js 20.6 or newer. No npm dependencies.
+Requirements: Node.js 22.5 or newer (for `node:sqlite`). No npm dependencies.
 
 ```bash
 cp .env.example .env      # then put your Qloo hackathon key in .env
@@ -114,7 +142,8 @@ npm test                  # unit tests (mocked Qloo, no key needed)
 
 - **Any server (what the live demo uses):** run `node local-server.mjs` behind a reverse proxy
   (the demo uses Caddy for HTTPS and systemd with `QLOO_API_KEY` / `QLOO_API_URL` in an environment file).
-- **Cloudflare Workers:** `npx wrangler secret put QLOO_API_KEY`, then `npm run deploy:cloudflare`.
+- **Cloudflare Workers:** `npx wrangler secret put QLOO_API_KEY`, then `npm run deploy:cloudflare`. The
+  guest planner and MCP work there; accounts and two-phone rooms need the Node server and its SQLite file.
 
 ## HTTP API
 
@@ -123,6 +152,10 @@ npm test                  # unit tests (mocked Qloo, no key needed)
 | `/` | GET | The web app |
 | `/api/plan` | POST | `{"first", "second", "city", "occasion"}` → the plan as JSON. With `Accept: application/x-ndjson` it streams `{"event":"step"}` lines as the agent works, then `{"event":"result"}` |
 | `/api/evening` | POST | `{"first", "second", "city" or "lat"/"lon", "start", "day", "cuisine", "mood", "budget"}` → the evening plan, streamed the same way |
+| `/api/rooms` | POST | Create a two-phone plan: `{"name", "favorite", "settings"}` → `{id, token, url}` |
+| `/api/rooms/:id` | GET | Room state for the `x-room-token` holder (favorites hidden until the plan exists) |
+| `/api/rooms/:id/join`, `/plan`, `/vote` | POST | Join with your own favorite, run the plan (streamed), vote on an option |
+| `/api/account`, `/api/account/signup`, `/login`, `/logout`, `/profile`, `/friends`, `/friends/accept`, `/friends/remove`, `/delete` | GET / POST / PUT | Optional accounts, profile and friends |
 | `/mcp` | POST | MCP endpoint (JSON-RPC: `initialize`, `tools/list`, `tools/call`, `ping`) |
 | `/api/status` | GET | `{"live": true, ...}` when a Qloo key is configured |
 | `/health` | GET | Health check |
@@ -135,6 +168,9 @@ worker/index.js     Routes, NDJSON streaming, cache and per-client rate limit (W
 worker/engine.js    The planning agent: signal check, search rounds, refinement, fairness ranking, films
 worker/evening.js   Tonight's plan: dinner, a nearby second stop, a show, walking time and opening hours
 worker/app.js       Installable app: manifest, service worker and icons
+worker/store.js     SQLite storage: accounts, sessions, friends, two-phone rooms and votes
+worker/social.js    Account and room API (optional; the guest planner never needs it)
+worker/social-ui.js Browser script for sign-in, profile, friends, invites, rooms and votes
 worker/qloo.js      Qloo client: entity parsing, explainability, request queue and 429 retries
 worker/mcp.js       MCP server: tool definitions and JSON-RPC handling
 worker/page.js      The web app (single page, no build step)

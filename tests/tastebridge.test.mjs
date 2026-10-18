@@ -167,7 +167,9 @@ test("plan swaps a favorite that carries no Qloo taste signal for its next readi
 });
 
 test("plan rejects incomplete input before calling Qloo", async () => {
-  await assert.rejects(plan({ first: "A", second: "Radiohead", city: "Hanoi" }, "k"), /two favorites and a city/);
+  await assert.rejects(plan({ first: "A", second: "Radiohead", city: "Hanoi" }, "k"), /at least one favorite/);
+  await assert.rejects(plan({ first: "Radiohead", second: "Bjork" }, "k"), /Enter a city/);
+  await assert.rejects(plan({ favorites: ["a1", "b2", "c3", "d4", "e5"], city: "Hanoi" }, "k"), /up to four/);
 });
 
 test("the planning API streams agent steps then the result as NDJSON", async () => {
@@ -303,4 +305,91 @@ test("MCP lists plan_evening and the app serves its manifest, worker and icons",
   }
   const manifest = await (await worker.fetch(new Request("http://x/manifest.webmanifest"), {})).json();
   assert.equal(manifest.display, "standalone");
+});
+
+// ---- Accounts and two-phone rooms ----
+import { openStore } from "../worker/store.js";
+
+function client(env) {
+  let jar = "";
+  return async (path, { method = "GET", body, headers = {}, origin = "http://x" } = {}) => {
+    const res = await worker.fetch(new Request("http://x" + path, {
+      method, body: body && JSON.stringify(body),
+      headers: { "content-type": "application/json", cookie: jar, origin, "x-forwarded-for": "198.51.100." + (Math.random() * 200 | 0), ...headers },
+    }), env);
+    const set = res.headers.get("set-cookie");
+    if (set) jar = set.split(";")[0];
+    const type = res.headers.get("content-type") || "";
+    return { status: res.status, cookie: set, data: type.includes("ndjson") ? (await res.text()).trim().split("\n").map((l) => JSON.parse(l)) : await res.json() };
+  };
+}
+
+test("accounts: sign up, profile, friends need consent, secure cookie, delete", async () => {
+  const env = { QLOO_API_KEY: "k", STORE: openStore(":memory:") };
+  const minh = client(env), lan = client(env);
+  const up = await minh("/api/account/signup", { method: "POST", body: { username: "minh", password: "correct horse", display: "Minh" } });
+  assert.equal(up.status, 200);
+  assert.match(up.cookie, /HttpOnly; Secure; SameSite=Lax/);
+  assert.equal((await minh("/api/account/signup", { method: "POST", body: { username: "MINH", password: "another one", display: "x" } })).status, 409);
+  assert.equal((await minh("/api/account/signup", { method: "POST", body: { username: "bob", password: "short", display: "x" } })).status, 400);
+  await lan("/api/account/signup", { method: "POST", body: { username: "lan", password: "battery staple", display: "Lan" } });
+  await lan("/api/account/profile", { method: "PUT", body: { display: "Lan", favorite: "Daft Punk", city: "Hanoi", mood: "cozy", cuisine: "sushi" } });
+  assert.equal((await lan("/api/account")).data.user.cuisine, ""); // unknown cuisine dropped
+  assert.equal((await minh("/api/account/friends", { method: "POST", body: { username: "lan" } })).data.status, "pending");
+  assert.equal((await minh("/api/account")).data.friends[0].favorite, null); // no favorite before Lan accepts
+  await lan("/api/account/friends/accept", { method: "POST", body: { username: "minh" } });
+  assert.equal((await minh("/api/account")).data.friends[0].favorite, "Daft Punk");
+  assert.equal((await minh("/api/account/profile", { method: "PUT", body: { favorite: "x" }, origin: "https://evil.example" })).status, 403);
+  assert.equal((await minh("/api/account/login", { method: "POST", body: { username: "minh", password: "wrong password" } })).status, 401);
+  assert.equal((await minh("/api/account/delete", { method: "POST", body: { password: "nope" } })).status, 401);
+  assert.equal((await minh("/api/account/delete", { method: "POST", body: { password: "correct horse" } })).status, 200);
+  assert.equal((await lan("/api/account")).data.friends.length, 0);
+});
+
+test("rooms: two phones, favorites hidden until the plan, shared plan and votes", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fakeEveningQloo();
+  try {
+    const env = { QLOO_API_KEY: "k", STORE: openStore(":memory:") };
+    const host = client(env), friend = client(env), stranger = client(env);
+    const made = await host("/api/rooms", { method: "POST", body: { name: "Minh", favorite: "Spirited Away", settings: { mode: "evening", city: "New York", cuisine: "japanese", mood: "romantic", start: "18:30", day: "friday" } } });
+    assert.equal(made.status, 200);
+    const { id, token } = made.data;
+    assert.match(made.data.url, new RegExp("/r/" + id + "$"));
+    const seen = await friend("/api/rooms/" + id);
+    assert.equal(seen.data.canJoin, true);
+    assert.equal(seen.data.members[0].name, "Minh");
+    assert.equal(seen.data.members[0].favorite, null); // blind until the plan exists
+    assert.equal((await friend("/api/rooms/" + id + "/plan", { method: "POST" })).status, 403);
+    const joined = await friend("/api/rooms/" + id + "/join", { method: "POST", body: { name: "Lan", favorite: "Daft Punk" } });
+    const friendToken = joined.data.token;
+    assert.equal((await stranger("/api/rooms/" + id + "/join", { method: "POST", body: { name: "X", favorite: "Radiohead" } })).status, 409);
+    const run = await host("/api/rooms/" + id + "/plan", { method: "POST", headers: { "x-room-token": token } });
+    assert.equal(run.data.at(-1).event, "result");
+    assert.deepEqual(run.data.at(-1).plan.seeds.map((s) => s.person), ["Minh", "Lan"]);
+    const view = await friend("/api/rooms/" + id, { headers: { "x-room-token": friendToken } });
+    assert.equal(view.data.you, 1);
+    assert.equal(view.data.members[0].favorite, "Spirited Away"); // revealed with the plan
+    const option = view.data.plan.stops[0].options[0].id;
+    assert.equal((await friend("/api/rooms/" + id + "/vote", { method: "POST", headers: { "x-room-token": friendToken }, body: { option, value: 1 } })).status, 200);
+    assert.equal((await friend("/api/rooms/" + id + "/vote", { method: "POST", headers: { "x-room-token": friendToken }, body: { option: "made-up", value: 1 } })).status, 400);
+    assert.equal((await stranger("/api/rooms/" + id + "/vote", { method: "POST", body: { option, value: 1 } })).status, 403);
+    const after = await host("/api/rooms/" + id, { headers: { "x-room-token": token } });
+    assert.deepEqual(after.data.votes[option], { up: 1, down: 0, mine: 0 });
+    assert.equal((await host("/api/rooms/nosuchroom1")).status, 404);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("rooms never reveal the host's location and reject oversized bodies", async () => {
+  const env = { QLOO_API_KEY: "k", STORE: openStore(":memory:") };
+  const host = client(env), friend = client(env);
+  const made = await host("/api/rooms", { method: "POST", body: { name: "Minh", favorite: "Spirited Away", settings: { mode: "evening", lat: 10.776912, lon: 106.700981 } } });
+  const seen = await friend("/api/rooms/" + made.data.id);
+  assert.equal(seen.data.settings.lat, undefined);
+  assert.equal(seen.data.settings.lon, undefined);
+  assert.equal(seen.data.settings.near, true);
+  const big = await host("/api/account/login", { method: "POST", body: { username: "x", password: "y".repeat(5000) } });
+  assert.equal(big.status, 413);
 });
