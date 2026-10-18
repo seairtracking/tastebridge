@@ -16,6 +16,8 @@ export function entity(item) {
   if (!UUID.test(id || '') || !tidy(name)) return null;
   const explain = item?.query?.explainability?.['signal.interests.entities'];
   const tags = Array.isArray(item?.tags) ? item.tags.map((t) => String(t?.id || t?.tag_id || '')) : [];
+  const p = item?.properties || {};
+  const price = Number(p.price_level), year = Number(p.release_year), rating = Number(p.business_rating);
   return {
     id: id.toLowerCase(),
     name: tidy(name, 100),
@@ -25,7 +27,22 @@ export function entity(item) {
     categories: tags.filter((t) => t.startsWith('urn:tag:category:place:')).map((t) => t.slice('urn:tag:category:place:'.length)),
     popularity: typeof item?.popularity === 'number' ? item.popularity : null,
     explain: Array.isArray(explain) ? explain.map((x) => ({ id: String(x?.entity_id || '').toLowerCase(), score: Number(x?.score) || 0 })) : [],
+    // Details for the result cards: a photo or poster, rating, price level, links and film facts.
+    image: safeUrl(p.image?.url || p.images?.[0]?.url, ['https:']),
+    rating: rating > 0 && rating <= 5 ? Math.round(rating * 10) / 10 : null,
+    price: Number.isInteger(price) && price >= 1 && price <= 4 ? price : null,
+    website: safeUrl(p.website, ['https:', 'http:']),
+    lat: Number.isFinite(item?.location?.lat) ? item.location.lat : null,
+    lon: Number.isFinite(item?.location?.lon) ? item.location.lon : null,
+    year: Number.isInteger(year) && year > 1850 && year < 2100 ? year : null,
+    genres: Array.isArray(p.genres) ? p.genres.filter((g) => typeof g === 'string').slice(0, 2).map((g) => tidy(g, 30)) : [],
   };
+}
+
+// Only plain web links reach the page; anything else (javascript:, data:, malformed) is dropped.
+function safeUrl(value, protocols) {
+  if (typeof value !== 'string' || value.length > 500) return null;
+  try { const url = new URL(value); return protocols.includes(url.protocol) ? url.href : null; } catch { return null; }
 }
 
 // The hackathon key allows only a few requests in flight: queue calls and retry 429s with backoff.

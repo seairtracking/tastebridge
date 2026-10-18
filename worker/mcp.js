@@ -42,8 +42,12 @@ function summary(p) {
   const pct = (s) => (s ? ` (${s.a}% ${p.seeds[0].name} / ${s.b}% ${p.seeds[1].name})` : '');
   const lines = [
     `${p.occasionLabel} in ${p.city} for a fan of ${p.seeds[0].name} and a fan of ${p.seeds[1].name}:`,
-    ...p.places.map((x, i) => `${i + 1}. ${x.name}${x.category ? ` [${x.category}]` : ''}${x.address ? ` — ${x.address}` : ''}${pct(x.share)}. ${x.reason}`),
-    `Watch together: ${p.films.map((f) => f.name + pct(f.share)).join('; ') || 'no film found'}. ${p.filmNote}`,
+    ...p.places.map((x, i) => {
+      const facts = [x.category, x.rating ? `★${x.rating}` : '', x.price ? '$'.repeat(x.price) : ''].filter(Boolean).join(', ');
+      const links = [x.map && `map: ${x.map}`, x.website && `website: ${x.website}`].filter(Boolean).join(' · ');
+      return `${i + 1}. ${x.name}${facts ? ` [${facts}]` : ''}${x.address ? ` — ${x.address}` : ''}${pct(x.share)}. ${x.reason}${links ? ` (${links})` : ''}`;
+    }),
+    `Watch together: ${p.films.map((f) => f.name + (f.year ? ` (${f.year})` : '') + pct(f.share)).join('; ') || 'no film found'}. ${p.filmNote}`,
     ...(p.warning ? [`Note: ${p.warning}`] : []),
     `How the agent decided: ${p.steps.map((s) => s.detail).join(' ')}`,
   ];

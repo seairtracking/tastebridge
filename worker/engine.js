@@ -56,6 +56,16 @@ export function inCity(address, key) {
   return key.split('|').some((k) => text.includes(k));
 }
 
+// What a result card needs beyond the name: a photo, rating, price level, a map link and the website.
+export function placeDetails(x) {
+  const query = [x.name, x.address].filter(Boolean).join(', ') || (x.lat != null ? `${x.lat},${x.lon}` : '');
+  return {
+    image: x.image || null, rating: x.rating ?? null, price: x.price ?? null, website: x.website || null,
+    map: query ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(query) : null,
+  };
+}
+export const filmDetails = (f) => ({ image: f.image || null, year: f.year ?? null, genres: f.genres || [] });
+
 // Fairness-weighted reciprocal-rank ranking over each person's list and the combined list.
 export function bridge(a, b, joint, { seeds = [], take = 4, city = '', fits = null } = {}) {
   const key = cityKey(city);
@@ -73,7 +83,7 @@ export function bridge(a, b, joint, { seeds = [], take = 4, city = '', fits = nu
     const share = shares(x, seeds[0], seeds[1]) || (av + bv > 0 ? { a: Math.round((av / (av + bv)) * 100), b: 100 - Math.round((av / (av + bv)) * 100) } : null);
     const reason = ar && br ? 'In both people’s individual Qloo lists.' : jr ? 'In Qloo’s combined-taste list for the pair.' : 'A strong pick for one person.';
     const fit = occasionFit(x.categories, fits);
-    return { id: x.id, name: x.name, address: x.address, category: (x.categories?.[0] || '').replace(/_/g, ' '), aRank: ar, bRank: br, jointRank: jr, share, mainstream, fit, reason, score };
+    return { id: x.id, name: x.name, address: x.address, category: (x.categories?.[0] || '').replace(/_/g, ' '), ...placeDetails(x), aRank: ar, bRank: br, jointRank: jr, share, mainstream, fit, reason, score };
   }).sort((x, y) => y.score - x.score)
     .filter((x, i, all) => all.findIndex((y) => y.name.toLowerCase() === x.name.toLowerCase()) === i)
     .slice(0, take)
@@ -85,7 +95,7 @@ export function balancedFilms(list, [aId, bId], exclude = new Set(), take = 3) {
   return list.filter((f) => !exclude.has(f.id)).map((f, i) => {
     const share = shares(f, aId, bId);
     const balance = share ? Math.min(share.a, share.b) / Math.max(share.a, share.b) : 0;
-    return { id: f.id, name: f.name, share, score: balance - i * 0.01 };
+    return { id: f.id, name: f.name, ...filmDetails(f), share, score: balance - i * 0.01 };
   }).sort((x, y) => y.score - x.score).slice(0, take).map(({ score, ...f }) => f);
 }
 
@@ -176,7 +186,7 @@ export async function plan(input, key, origin = ORIGIN, onStep = () => {}) {
     const skip = new Set([a.id, b.id]);
     const pickA = aFilms.find((f) => !skip.has(f.id));
     const pickB = bFilms.find((f) => !skip.has(f.id) && f.id !== pickA?.id);
-    const fallback = [pickA && { id: pickA.id, name: pickA.name, share: { a: 100, b: 0 }, for: a.name }, pickB && { id: pickB.id, name: pickB.name, share: { a: 0, b: 100 }, for: b.name }].filter(Boolean);
+    const fallback = [pickA && { id: pickA.id, name: pickA.name, ...filmDetails(pickA), share: { a: 100, b: 0 }, for: a.name }, pickB && { id: pickB.id, name: pickB.name, ...filmDetails(pickB), share: { a: 0, b: 100 }, for: b.name }].filter(Boolean);
     if (fallback.length === 2) { films = fallback; filmNote = 'Qloo found little shared film taste, so here is one pick for each of you.'; }
     else if (fallback.length) {
       // Only one side has its own film list: show that pick next to the closest shared films, with their real shares.

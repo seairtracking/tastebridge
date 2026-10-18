@@ -36,6 +36,8 @@ app streams each step live:
 6. **Show each person's share.** Each place and film carries an A/B split from Qloo explainability.
    Films are the combined-taste results closest to an even split; when there is almost no shared film
    taste, the agent picks one film for each person instead of pretending there is overlap.
+7. **Show what you need to decide.** Every place card has a photo, Qloo rating, price level, a map link and
+   the website; every film has its poster, year and genres. All of it comes from Qloo's entity data.
 
 Without Qloo the app has nothing to rank: no live data means no plan. The UI only offers a clearly
 labeled illustrative sample.

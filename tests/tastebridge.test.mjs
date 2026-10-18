@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker, { plan, bridge, balancedFilms, shares, entity } from "../worker/index.js";
-import { OCCASIONS, occasionFit } from "../worker/engine.js";
+import { OCCASIONS, occasionFit, placeDetails } from "../worker/engine.js";
 
 const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const item = (n, name, extra = {}) => ({ entity_id: id(n), name, ...extra });
@@ -18,6 +18,26 @@ test("entity keeps only Qloo records with a UUID and a name, and reads explainab
   assert.deepEqual(e.explain, [{ id: id(1), score: 0.6 }, { id: id(2), score: 0.4 }]);
   assert.equal(entity({ entity_id: "not-a-uuid", name: "x" }), null);
   assert.equal(entity({ entity_id: id(2) }), null);
+});
+
+test("entity keeps safe photo, rating, price, website and film details only", () => {
+  const place = entity(item(6, "Bar", { location: { lat: 10.77, lon: 106.69 }, properties: { image: { url: "https://images.qloo.com/x.jpg" }, business_rating: 4.2999, price_level: 2, website: "javascript:alert(1)" } }));
+  assert.equal(place.image, "https://images.qloo.com/x.jpg");
+  assert.equal(place.rating, 4.3);
+  assert.equal(place.price, 2);
+  assert.equal(place.website, null);
+  assert.equal(place.lat, 10.77);
+  const film = entity(item(7, "Film", { properties: { image: { url: "http://insecure.example/p.jpg" }, release_year: "1997", genres: ["Animation", "Fantasy", "Drama"] } }));
+  assert.equal(film.image, null);
+  assert.equal(film.year, 1997);
+  assert.deepEqual(film.genres, ["Animation", "Fantasy"]);
+});
+
+test("placeDetails builds a map search link from the name and address", () => {
+  const d = placeDetails({ name: "Layla", address: "63 Đông Du, Sài Gòn", rating: 4.5, price: 3, website: "https://layla.vn/" });
+  assert.equal(d.map, "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent("Layla, 63 Đông Du, Sài Gòn"));
+  assert.equal(d.rating, 4.5);
+  assert.equal(d.website, "https://layla.vn/");
 });
 
 test("shares turns explainability into percentages that sum to 100", () => {
