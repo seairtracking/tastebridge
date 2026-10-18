@@ -18,7 +18,7 @@ It runs in the browser and **installs like an app** on iPhone (Share → Add to 
 (Install app).
 
 - **Live demo:** https://tastebridge.trackingport.com
-- **Demo video (1:44):** https://youtu.be/WYHLv6PQkuU
+- **Demo video (1:46):** https://youtu.be/K_mPx7ufQa4
 - **MCP server for AI assistants:** `https://tastebridge.trackingport.com/mcp`
 - Built for the **Qloo Agentic Hackathon** (2026)
 
