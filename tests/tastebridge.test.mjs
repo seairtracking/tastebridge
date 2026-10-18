@@ -550,3 +550,45 @@ test("a reading picked from the suggestions is used instead of the default one",
     globalThis.fetch = realFetch;
   }
 });
+
+test("every language has every message, with the same placeholders as English", async () => {
+  const { PAGE } = await import("../worker/i18n-page.js");
+  const { SOCIAL } = await import("../worker/i18n-social.js");
+  const { MSG } = await import("../worker/i18n-msg.js");
+  const holes = (s) => (s.match(/\{\w+(?:\|\w+)?\}/g) || []).sort().join();
+  for (const [k, v] of Object.entries({ ...PAGE, ...SOCIAL })) {
+    assert.equal(v.length, 9, k);
+    for (const t of v) assert.equal(holes(t), holes(k), `${k} → ${t}`);
+  }
+  for (const [k, v] of Object.entries(MSG)) {
+    assert.equal(v.length, 10, k);
+    for (const t of v) assert.equal(holes(t), holes(v[0]), `${k} → ${t}`);
+  }
+  const fs = await import("node:fs");
+  const used = ["engine.js", "evening.js"].flatMap((f) => [...fs.readFileSync(new URL(`../worker/${f}`, import.meta.url), "utf8").matchAll(/M\('([\w.-]+)'/g)].map((m) => m[1]));
+  for (const k of used) assert.ok(MSG[k], `missing message ${k}`);
+  const client = ["page.js", "social-ui.js"].flatMap((f) => [...fs.readFileSync(new URL(`../worker/${f}`, import.meta.url), "utf8").matchAll(/T\((?:'([^']+)'|"([^"]+)")/g)].map((m) => m[1] || m[2]));
+  for (const k of client) if (!/\.$/.test(k)) assert.ok(PAGE[k] || SOCIAL[k] || MSG[k], `missing text ${k}`);
+});
+
+test("the browser T() fills templates, translates references and falls back to English", async () => {
+  const vm = await import("node:vm");
+  const { i18nScript } = await import("../worker/i18n.js");
+  const doc = { documentElement: {}, body: {}, title: "", createTreeWalker: () => ({ nextNode: () => null }), querySelectorAll: () => [], getElementById: () => null, dispatchEvent() {} };
+  const run = (langs) => {
+    const window = {};
+    vm.runInNewContext(i18nScript, { window, document: doc, navigator: { languages: langs }, localStorage: { getItem: () => null, setItem() {} }, NodeFilter: { SHOW_TEXT: 4 }, WeakMap, Event: class {} });
+    return window;
+  };
+  const vi = run(["vi-VN", "en"]);
+  assert.equal(vi.tbLang, "vi");
+  assert.equal(vi.T("{min} min", { min: 5 }), "5 phút");
+  assert.equal(vi.T({ k: "s.resolved.d", v: { a: "Amélie", ka: "film", b: "Daft Punk", kb: "artist" } }).includes("phim"), true);
+  assert.equal(vi.T({ k: "s.refineStage.d", v: { count: 1, why: { k: "why.walk3", v: {} } } }).includes("{"), false);
+  assert.equal(vi.T("Birthday"), "Sinh nhật");
+  assert.equal(vi.T("A sentence nobody translated."), "A sentence nobody translated.");
+  assert.equal(vi.T("cuisine.burmese"), "burmese");
+  assert.equal(run(["in-ID"]).tbLang, "id");
+  assert.equal(run(["pt-BR"]).tbLang, "en");
+  assert.equal(run(["ja"]).T("Sign in"), "ログイン");
+});

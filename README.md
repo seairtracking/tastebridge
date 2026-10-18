@@ -41,6 +41,9 @@ Two ways to use it:
   and served only to their owner and, for shared memories, to accepted friends.
 - **Account recovery without email:** sign-up shows a one-time recovery code; **Forgot password?** uses it
   to set a new password, and **Change password** is in your profile. Both sign out your other devices.
+- **10 languages:** English, Tiếng Việt, 日本語, 한국어, 中文, ไทย, Bahasa Indonesia, Español, Français and
+  Deutsch. The app follows the phone's language and has a picker in the header. The agent's steps, reasons,
+  tips and errors are sent as message keys, so a finished plan switches language without asking Qloo again.
 
 It runs in the browser and **installs like an app** on iPhone (Share → Add to Home Screen) and Android
 (Install app).
@@ -194,6 +197,7 @@ worker/social-ui.js Browser script for sign-in, profile, friends, invites, rooms
 worker/qloo.js      Qloo client: entity parsing, explainability, request queue and 429 retries
 worker/mcp.js       MCP server: tool definitions and JSON-RPC handling
 worker/page.js      The web app (single page, no build step)
+worker/i18n*.js     Translations (page, accounts, agent messages) and the browser T() helper
 local-server.mjs    Node.js HTTP adapter that serves the worker on a normal server, with streaming
 tests/              node:test unit tests with a mocked Qloo API
 wrangler.toml       Optional Cloudflare Workers config
