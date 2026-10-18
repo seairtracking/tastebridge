@@ -59,6 +59,7 @@ Two ways to use it:
 - **10 languages:** English, Tiếng Việt, 日本語, 한국어, 中文, ไทย, Bahasa Indonesia, Español, Français and
   Deutsch. The app follows the phone's language and has a picker in the header. The agent's steps, reasons,
   tips and errors are sent as message keys, so a finished plan switches language without asking Qloo again.
+  A phone downloads only the language it shows (about 20 KB compressed), and place categories are translated too.
 
 It runs in the browser and **installs like an app** on iPhone (Share → Add to Home Screen) and Android
 (Install app).

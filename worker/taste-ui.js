@@ -57,6 +57,8 @@ function chip(name,on,onClick){var b=text('button','chip',name);b.type='button';
 function sync(){var b=el('tasteBtn'),f=el('first');if(!b)return;var on=state.active&&size()>0;b.textContent=on?T('✨ My taste ✓'):T('✨ My taste');b.setAttribute('aria-pressed',String(on));
   if(on){f.value=summary();f.readOnly=true;f.dataset.profile='1';delete f.dataset.pick}else if(f.dataset.profile){f.value='';f.readOnly=false;delete f.dataset.profile}}
 window.tbProfile=function(){return state.active&&size()>0?state.profile:null};
+window.tbProfileAny=function(){return size()>0?state.profile:null};
+window.tbProfileLabel=summary;
 
 // ---- the sheet ----
 var dialog=el('tasteDialog'),report=null;
@@ -94,7 +96,7 @@ function showReport(d){var box=text('section','taste-report');box.append(text('h
   if(more.childNodes.length)box.append(text('h4',null,T('You might also like')),more);
   return box}
 
-el('tasteBtn').addEventListener('click',open);
+el('tasteBtn').addEventListener('click',open);window.tbOpenTaste=open;
 document.addEventListener('tb:account',function(){var t=window.tbMe&&window.tbMe.taste;if(t&&!size()){state.profile={sections:t.sections||{},instruments:t.instruments||[],hobbies:t.hobbies||[]};state.active=true;try{localStorage.setItem(KEY,JSON.stringify(state))}catch(e){}sync()}});
 document.addEventListener('tb:lang',function(){sync();if(dialog.open)render()});
 sync();`;

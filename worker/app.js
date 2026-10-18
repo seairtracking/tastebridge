@@ -20,7 +20,7 @@ const ROUTES = {
 };
 
 import { socialScript } from './social-ui.js';
-import { i18nScript } from './i18n.js';
+import { i18nScript, packScript } from './i18n.js';
 import { tasteScript } from './taste-ui.js';
 import { momentsScript } from './moments-ui.js';
 ROUTES['/social.js'] = () => new Response(socialScript, { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' } });
@@ -29,5 +29,11 @@ ROUTES['/taste.js'] = () => new Response(tasteScript, { headers: { 'content-type
 ROUTES['/i18n.js'] = () => new Response(i18nScript, { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' } });
 
 export function appRoute(pathname) {
+  // One language pack per file; the URL carries a version, so packs can be cached for a day.
+  const lang = /^\/i18n\/([a-z]{2})\.js$/.exec(pathname);
+  if (lang) {
+    const js = packScript(lang[1]);
+    return js ? new Response(js, { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=86400' } }) : null;
+  }
   return Object.hasOwn(ROUTES, pathname) ? ROUTES[pathname]() : null;
 }

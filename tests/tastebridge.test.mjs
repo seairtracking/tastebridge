@@ -400,7 +400,7 @@ test("rooms never reveal the host's location and reject oversized bodies", async
   assert.equal(seen.data.settings.lat, undefined);
   assert.equal(seen.data.settings.lon, undefined);
   assert.equal(seen.data.settings.near, true);
-  const big = await host("/api/account/login", { method: "POST", body: { username: "x", password: "y".repeat(5000) } });
+  const big = await host("/api/account/login", { method: "POST", body: { username: "x", password: "y".repeat(9000) } });
   assert.equal(big.status, 413);
 });
 
@@ -578,11 +578,15 @@ test("every language has every message, with the same placeholders as English", 
 
 test("the browser T() fills templates, translates references and falls back to English", async () => {
   const vm = await import("node:vm");
-  const { i18nScript } = await import("../worker/i18n.js");
-  const doc = { documentElement: {}, body: {}, title: "", createTreeWalker: () => ({ nextNode: () => null }), querySelectorAll: () => [], getElementById: () => null, dispatchEvent() {} };
+  const { i18nScript, packScript, langPack } = await import("../worker/i18n.js");
   const run = (langs) => {
-    const window = {};
-    vm.runInNewContext(i18nScript, { window, document: doc, navigator: { languages: langs }, localStorage: { getItem: () => null, setItem() {} }, NodeFilter: { SHOW_TEXT: 4 }, WeakMap, Event: class {} });
+    const window = {}, written = [];
+    const doc = { documentElement: {}, body: {}, title: "", createTreeWalker: () => ({ nextNode: () => null }), querySelectorAll: () => [], getElementById: () => null, dispatchEvent() {}, write: (h) => written.push(h) };
+    const ctx = { window, document: doc, navigator: { languages: langs }, localStorage: { getItem: () => null, setItem() {} }, NodeFilter: { SHOW_TEXT: 4 }, WeakMap, Event: class {} };
+    vm.runInNewContext(i18nScript, ctx);
+    // the core asks for its language pack while the page is parsed; load it like the browser would
+    const m = /\/i18n\/(\w+)\.js/.exec(written.join(""));
+    if (m) vm.runInNewContext(packScript(m[1]), ctx);
     return window;
   };
   const vi = run(["vi-VN", "en"]);
@@ -591,11 +595,17 @@ test("the browser T() fills templates, translates references and falls back to E
   assert.equal(vi.T({ k: "s.resolved.d", v: { a: "Amélie", ka: "film", b: "Daft Punk", kb: "artist" } }).includes("phim"), true);
   assert.equal(vi.T({ k: "s.refineStage.d", v: { count: 1, why: { k: "why.walk3", v: {} } } }).includes("{"), false);
   assert.equal(vi.T("Birthday"), "Sinh nhật");
+  assert.equal(vi.T("cocktail bar"), "bar cocktail");
   assert.equal(vi.T("A sentence nobody translated."), "A sentence nobody translated.");
   assert.equal(vi.T("cuisine.burmese"), "burmese");
   assert.equal(run(["in-ID"]).tbLang, "id");
-  assert.equal(run(["pt-BR"]).tbLang, "en");
+  const en = run(["pt-BR"]);
+  assert.equal(en.tbLang, "en");
+  assert.equal(en.T({ k: "s.weather.l" }), "Checking the weather");
   assert.equal(run(["ja"]).T("Sign in"), "ログイン");
+  // a pack holds one language only, so it stays small
+  assert.ok(packScript("vi").length < 0.2 * (await import("../worker/i18n.js")).i18nScript.length + 200000);
+  assert.equal(langPack("en"), null);
 });
 
 test("a taste profile keeps only known genres and real ids, and counts as one person's signal", async () => {
@@ -680,4 +690,31 @@ test("moments: friends see each other's photos and reactions at once, strangers 
   assert.equal((await bob(`/api/account/moments/${posted.data.id}/remove`, { method: "POST", body: {} })).status, 404);
   assert.equal((await ann(`/api/account/moments/${posted.data.id}/remove`, { method: "POST", body: {} })).status, 200);
   assert.equal((await bob(feed.moments[0].photo)).status, 404);
+});
+
+test("rooms keep each person's taste profile and plan with it, without showing it to the other phone", async () => {
+  const env = { QLOO_API_KEY: "k", STORE: openStore(":memory:") };
+  const host = client(env), guest = client(env);
+  const profile = { sections: { film: { picks: [{ id: id(1), name: "Spirited Away", kind: "film" }], genres: ["urn:tag:genre:media:mystery"] } }, hobbies: [] };
+  const made = await host("/api/rooms", { method: "POST", body: { name: "An", profile, settings: { mode: "evening", city: "Hanoi" } } });
+  assert.equal(made.status, 200);
+  const room = env.STORE.room(made.data.id);
+  assert.equal(room.members[0].favorite, "Spirited Away");
+  assert.deepEqual(room.members[0].profile.sections.film.genres, ["urn:tag:genre:media:mystery"]);
+  assert.equal(room.members[0].pick, null);
+  const view = (await guest(`/api/rooms/${made.data.id}`)).data;
+  assert.equal(view.members[0].favorite, null);
+  assert.equal("profile" in view.members[0], false);
+  const joined = await guest(`/api/rooms/${made.data.id}/join`, { method: "POST", body: { name: "Binh", favorite: "Daft Punk", profile: { sections: { music: { genres: ["urn:tag:genre:music:not_real"] } } } } });
+  assert.equal(joined.status, 200);
+  assert.equal(env.STORE.room(made.data.id).members[1].profile, null); // nothing valid in it: the typed favorite is used
+});
+
+test("family evenings leave out bars by category and by name, but not words that only start the same", async () => {
+  const { familyFriendly } = await import("../worker/family.js");
+  assert.equal(familyFriendly("event planner", "Zodiac Bar, Club and Karaoke"), false);
+  assert.equal(familyFriendly("cocktail bar", "Anything"), false);
+  assert.equal(familyFriendly("restaurant", "Barbecue House"), true);
+  assert.equal(familyFriendly("restaurant", "Clubhouse Diner"), true);
+  assert.equal(familyFriendly("ice cream shop", "Gelato Lab"), true);
 });

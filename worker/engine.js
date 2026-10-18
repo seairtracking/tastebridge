@@ -1,7 +1,8 @@
 // TasteBridge planning agent: understands two tastes through Qloo, searches for an occasion,
 // refines the search when there is not enough common ground, and ranks a fair plan for both people.
 import { ORIGIN, tidy, candidates, insights, kind } from './qloo.js';
-import { cleanProfile, profileSize, profileSeed } from './taste.js';
+import { cleanProfile, profileSize, profileSeed, profilePrefs } from './taste.js';
+import { familyFriendly } from './family.js';
 
 // `fits` matches the Qloo place categories that really suit the occasion; Qloo's tag filter alone is loose
 // (a museum that also has a bar counts as a bar).
@@ -89,6 +90,7 @@ export function shares(item, aId, bId) {
 }
 const asPair = (s) => (s && s.length === 2 ? { a: s[0], b: s[1] } : null);
 export const M = (k, v = {}) => ({ k, v });
+export const PREF_TEXT = { veg: 'Vegetarian and vegan dishes come first.', thrifty: 'Places that are easy on the wallet come first.', fine: 'Fine dining comes first.', kids: 'Family-friendly places, for a parent of young children.' };
 export const who = (n) => (n === 1 ? 'you' : n === 2 ? 'both of you' : 'everyone');
 
 // Fairness-weighted reciprocal-rank ranking over each person's list and the combined list (1 to 4 people).
@@ -264,6 +266,17 @@ export async function plan(input, key, origin = ORIGIN, onStep = () => {}) {
 
   const { seeds, filmList, warning, warningKey } = await understandAll(favorites, key, origin, step, picks, profiles);
   const n = seeds.length, ids = seeds.map((s) => s.id);
+  // Profile hobbies the planner can act on: vegetarian food first at dinner, price, and no bars for young kids.
+  const prefs = profilePrefs(profiles).filter((p) => p !== 'veg' || occasion === 'dinner');
+  if (prefs.length) step('profile', 'Using your taste profile', prefs.map((p) => PREF_TEXT[p]).join(' '), { l: M('s.prefs.l'), d: prefs.map((p) => M('pref.' + p)) });
+  const boost = (x) => {
+    let f = 1;
+    if (prefs.includes('veg')) f *= x.cuisines?.some((c) => /vegetarian|vegan/.test(c)) ? 1.6 : 1;
+    if (prefs.includes('thrifty') && x.price) f *= x.price >= 3 ? 0.6 : 1.1;
+    if (prefs.includes('fine') && x.price) f *= x.price >= 3 ? 1.3 : x.price <= 1 ? 0.7 : 1;
+    return f;
+  };
+  const kidsOk = (p) => !prefs.includes('kids') || familyFriendly(p.category, p.name);
 
   // A good pick is in the city and is mainly the kind of place the occasion calls for.
   const good = (list) => list.filter((p) => inCity(p.address, cityKey(city)) && p.fit === 1).length;
@@ -282,7 +295,7 @@ export async function plan(input, key, origin = ORIGIN, onStep = () => {}) {
       n > 1 ? insights({ ...base, 'signal.interests.entities': ids.join(','), 'feature.explainability': 'true' }, key, origin) : Promise.resolve([]),
     ]);
     // Rank a wider pool, then drop places that are clearly the wrong kind when enough right ones exist.
-    const pool = bridgeN(lists, joint, { seeds: ids, city, fits: occ.fits, take: 12, seen });
+    const pool = bridgeN(lists, joint, { seeds: ids, city, fits: occ.fits, take: 12, seen, boost }).filter(kidsOk);
     // Places that are mainly the right kind lead; the rest keep their fairness order behind them.
     const suited = pool.filter((p) => p.fit >= 0.75 && inCity(p.address, cityKey(city))).sort((x, y) => (y.fit === 1) - (x.fit === 1));
     const found = (suited.length >= 3 ? suited : pool).slice(0, 4);

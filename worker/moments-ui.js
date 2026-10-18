@@ -11,7 +11,7 @@ function load(){if(!me()){strip.hidden=true;return Promise.resolve()}return api(
 
 // ---- the strip at the top of the app ----
 function drawStrip(){strip.hidden=false;strip.replaceChildren();var head=text('div','moments-head');head.append(text('span','step',T('Moments')));
-  var all=btn(unseen?T('See all ({n} new)',{n:unseen}):T('See all'),'vote',openFeed);head.append(all);strip.append(head);
+  var all=btn(unseen?T('See all ({n} new)',{n:unseen}):T('See all'),'vote',openFeed);var map=btn('🗺️ '+T('Memories'),'vote',function(){el('memoriesBtn').click()});var acts=text('span','moments-acts');acts.append(map,all);head.append(acts);strip.append(head);
   var row=text('div','moments-row');var add=btn('','moment-add',openPost);add.setAttribute('aria-label',T('Post a moment'));add.append(text('span','plus','📸'),text('small',null,T('Post')));row.append(add);
   if(!feed.length)row.append(text('p','muted',T('Share a photo or a few words with your friends. They see it at the top of their app.')));
   feed.slice(0,12).forEach(function(m){var c=document.createElement('button');c.type='button';c.className='moment-thumb';c.addEventListener('click',function(){openFeed(m.id)});

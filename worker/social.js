@@ -3,7 +3,7 @@
 import { tidy } from './qloo.js';
 import { CUISINES, MOODS, SPECIALS } from './evening.js';
 import { OCCASIONS } from './engine.js';
-import { cleanProfile, profileSize } from './taste.js';
+import { cleanProfile, profileSize, profilePicks } from './taste.js';
 const SESSION_DAYS = 30; // matches store.js; kept here so the router never loads node:sqlite
 
 const COOKIE = 'tb_session';
@@ -45,6 +45,9 @@ const cleanSettings = (s = {}) => {
   };
 };
 
+// A taste profile sent with an invite or a join stands in for that person's single favorite.
+const profileOf = (x) => { const p = x && typeof x === 'object' ? cleanProfile(x) : null; return p && profileSize(p) ? p : null; };
+const profileLabel = (p) => { const names = p ? profilePicks(p).map((x) => x.name) : []; return names.length ? names.slice(0, 2).join(', ') + (names.length > 2 ? ' +' + (names.length - 2) : '') : p ? 'Taste profile' : ''; };
 const pickOf = (x) => (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(x || '')) ? String(x).toLowerCase() : null);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const webUrl = (u) => { try { const x = new URL(String(u)); return x.protocol === 'https:' || x.protocol === 'http:' ? x.href.slice(0, 500) : null; } catch { return null; } };
@@ -85,11 +88,11 @@ export async function handleSocial(request, env, { allow, runPlan }) {
     if (!buf) return fail('Photo not found.', 404);
     return new Response(buf, { headers: { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'" } });
   }
-  if (Number(request.headers.get('content-length') || 0) > 4000) return fail('Request is too large.', 413);
+  if (Number(request.headers.get('content-length') || 0) > 8000) return fail('Request is too large.', 413); // room for a taste profile
   let body = {};
   if (request.method !== 'GET') {
     const raw = await request.text(); // read with a hard cap, even without a content-length header
-    if (raw.length > 4000) return fail('Request is too large.', 413);
+    if (raw.length > 8000) return fail('Request is too large.', 413);
     try { body = raw ? JSON.parse(raw) : {}; } catch { body = {}; }
   }
 
@@ -250,7 +253,8 @@ export async function handleSocial(request, env, { allow, runPlan }) {
     if (!id && request.method === 'POST') {
       if (!allow(request, 20, 'room')) return fail('Too many invites from this connection. Try again later.', 429);
       const name = tidy(body.name, 40) || me?.display || 'Me';
-      const favorite = tidy(body.favorite, 70) || me?.favorite || '';
+      const profile = profileOf(body.profile);
+      const favorite = tidy(body.favorite, 70) || me?.favorite || profileLabel(profile);
       if (favorite.length < 2) return fail('Enter your favorite first.');
       const settings = cleanSettings(body.settings);
       if (!settings.city && settings.lat == null) return fail('Enter a city or use your location.');
@@ -260,11 +264,12 @@ export async function handleSocial(request, env, { allow, runPlan }) {
         friend = store.userByName(tidy(body.invite, 20));
         if (!friend || !store.areFriends(me.id, friend.id)) return fail('You can only invite people who accepted your friend request.', 403);
       }
-      const room = store.createRoom({ settings, name, favorite, pick: pickOf(body.pick), userId: me?.id ?? null });
-      if (friend && friend.favorite) {
+      const room = store.createRoom({ settings, name, favorite, pick: profile ? null : pickOf(body.pick), profile, userId: me?.id ?? null });
+      const friendProfile = friend && profileOf(friend.taste);
+      if (friend && (friend.favorite || friendProfile)) {
         // Friends agreed to share their favorite when they accepted, so their seat fills in from their profile;
         // they still see the plan on their own phone and can vote.
-        store.joinRoom(room.id, { name: friend.display, favorite: friend.favorite, userId: friend.id });
+        store.joinRoom(room.id, { name: friend.display, favorite: friend.favorite || profileLabel(friendProfile), profile: friendProfile, userId: friend.id });
       } else if (friend) store.invite(room.id, friend.id);
       return json({ id: room.id, token: room.token, url: `${url.origin}/r/${room.id}` });
     }
@@ -293,9 +298,10 @@ export async function handleSocial(request, env, { allow, runPlan }) {
     if (action === 'join' && request.method === 'POST') {
       if (seat != null) return fail('You are already in this plan.', 409);
       const name = tidy(body.name, 40) || me?.display || 'Friend';
-      const favorite = tidy(body.favorite, 70) || me?.favorite || '';
+      const profile = profileOf(body.profile);
+      const favorite = tidy(body.favorite, 70) || me?.favorite || profileLabel(profile);
       if (favorite.length < 2) return fail('Enter your favorite first.');
-      try { return json(store.joinRoom(room.id, { name, favorite, pick: pickOf(body.pick), userId: me?.id ?? null })); } catch (e) { return fail(e.message, 409); }
+      try { return json(store.joinRoom(room.id, { name, favorite, pick: profile ? null : pickOf(body.pick), profile, userId: me?.id ?? null })); } catch (e) { return fail(e.message, 409); }
     }
     if (seat == null) return fail('Only the two people in this plan can do that.', 403);
     if (action === 'vote' && request.method === 'POST') {
@@ -309,7 +315,7 @@ export async function handleSocial(request, env, { allow, runPlan }) {
       const s = room.settings;
       const input = {
         seen: store.seenBy(room.members.map((m) => m.userId)),
-        favorites: room.members.map((m) => m.favorite), names: room.members.map((m) => m.name), picks: room.members.map((m) => m.pick),
+        favorites: room.members.map((m) => m.favorite), names: room.members.map((m) => m.name), picks: room.members.map((m) => m.pick), profiles: room.members.map((m) => m.profile),
         city: s.city, lat: s.lat, lon: s.lon, start: s.start, day: s.day, cuisine: s.cuisine, mood: s.mood, budget: s.budget, occasion: s.occasion, special: s.special,
       };
       return runPlan(s.mode, input, request, (result) => {

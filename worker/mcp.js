@@ -96,7 +96,7 @@ function eveningSummary(p) {
     return `${x.name}${facts ? ` [${facts}]` : ''}${pct(x)}${links ? ` (${links})` : ''}`;
   };
   return [
-    `An evening ${p.city === 'near you' ? 'near you' : 'in ' + p.city} from ${p.start} for ${forWhom(p)}${p.cuisine ? `, ${p.cuisine} food` : ''}${p.mood ? `, ${p.mood} mood` : ''}${p.specialLabel ? `, for a ${p.specialLabel.toLowerCase()}` : ''}:`,
+    `An evening ${p.near ? 'near you' : 'in ' + p.city} from ${p.start} for ${forWhom(p)}${p.cuisine ? `, ${p.cuisine} food` : ''}${p.mood ? `, ${p.mood} mood` : ''}${p.specialLabel ? `, for a ${p.specialLabel.toLowerCase()}` : ''}:`,
     ...p.stops.map((s) => `${s.time} ${s.title}: ${place(s.options[0])}${s.options.length > 1 ? `. Or: ${s.options.slice(1).map((x) => x.name).join(', ')}` : ''}.`),
     `Back home: ${p.films.map((f) => f.name + (f.year ? ` (${f.year})` : '') + pct(f)).join('; ') || 'no film found'}.`,
     ...(p.tip ? [`Tip: ${p.tip}`] : []),

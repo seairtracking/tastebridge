@@ -40,15 +40,20 @@ function recoverSheet(){sheet(function(box){box.append(text('h3',null,T('Forgot 
   f.addEventListener('submit',function(e){e.preventDefault();go.disabled=true;var code;api('/api/account/recover',{method:'POST',body:{username:u.value,code:c.value,password:p.value}}).then(function(r){code=r.recoveryCode;return refreshAccount()}).then(function(){codeSheet(code,false)}).catch(function(x){err.textContent=x.message}).finally(function(){go.disabled=false})});
   box.append(f)})}
 
+// The profile sheet is split into tabs, so a phone shows one short list at a time.
+var profileTab='me';
 function profileSheet(){refreshAccount().then(function(d){if(!me)return authSheet('login');sheet(function(box){
   box.append(text('h3',null,T("Hi, {name}",{name:me.display})),text('p','muted','@'+me.username+' · '+T("Your favorite is shared only with friends who accept you.")));
+  var tabsRow=text('div','tabs');box.append(tabsRow);
+  var tl=text('section','taste-link');tl.dataset.tab='me';var lab=window.tbProfileAny&&window.tbProfileAny()?window.tbProfileLabel():'';
+  tl.append(text('b',null,'✨ '+T('Your taste profile')),text('p','muted',lab||T('Not filled in yet. It helps TasteBridge understand what you really like.')),btn(T('Open taste profile'),'btn',function(){dialog.close();window.tbOpenTaste&&window.tbOpenTaste()}));box.append(tl);
   var f=document.createElement('form');var dn=input('text',me.display,{maxlength:'40'}),fav=input('text',me.favorite,{maxlength:'70',placeholder:T('e.g. Spirited Away')}),city=input('text',me.city,{maxlength:'70',placeholder:T('e.g. Ho Chi Minh City')}),cu=choose(CUISINES(),me.cuisine),mo=choose(MOODS(),me.mood);
   f.append(field(T('Display name'),dn),field(T('Your favorite (artist, film, book, show or game)'),fav),field(T('Home city'),city),field(T('Usual food'),cu),field(T('Usual mood'),mo));var err=errorLine();f.append(err);
   var row=text('div','bar-row');var save=text('button','btn primary',T('Save profile'));save.type='submit';row.append(save);f.append(row);
   f.addEventListener('submit',function(e){e.preventDefault();api('/api/account/profile',{method:'PUT',body:{display:dn.value,favorite:fav.value,city:city.value,cuisine:cu.value,mood:mo.value}}).then(function(){el('first').value=fav.value;return refreshAccount()}).then(function(){err.textContent=T('Saved.')}).catch(function(x){err.textContent=x.message})});
-  box.append(f);
+  f.dataset.tab='me';box.append(f);
   // friends
-  var fs=text('section');fs.append(text('h4',null,T('Friends')));var add=document.createElement('form');add.className='row';var un=input('text','',{placeholder:T('Friend’s username'),maxlength:'20'});var ab=text('button','btn',T('Add'));ab.type='submit';var row2=text('div','bar-row');row2.append(un,ab);add.append(row2);var ferr=errorLine();
+  var fs=text('section');fs.dataset.tab='friends';fs.append(text('h4',null,T('Friends')));var add=document.createElement('form');add.className='row';var un=input('text','',{placeholder:T('Friend’s username'),maxlength:'20'});var ab=text('button','btn',T('Add'));ab.type='submit';var row2=text('div','bar-row');row2.append(un,ab);add.append(row2);var ferr=errorLine();
   add.addEventListener('submit',function(e){e.preventDefault();api('/api/account/friends',{method:'POST',body:{username:un.value}}).then(function(r){ferr.textContent=r.status==='accepted'?T('You are now friends.'):T('Request sent. They need to accept.');un.value='';profileSheet()}).catch(function(x){ferr.textContent=x.message})});
   fs.append(add,ferr);var ul=text('ul','list');
   (d.friends||[]).forEach(function(fr){var li=text('li');var who=text('span',null,fr.display+' @'+fr.username+(fr.status==='friend'&&fr.favorite?' · '+T("loves {fav}",{fav:fr.favorite}):''));li.append(who);var act=text('span');
@@ -58,12 +63,12 @@ function profileSheet(){refreshAccount().then(function(d){if(!me)return authShee
     if(fr.status==='sent')who.append(text('span','muted',' · '+T("waiting")));li.append(act);ul.append(li)});
   if(!(d.friends||[]).length)ul.append(text('li','muted',T('No friends yet. Add someone by their username.')));fs.append(ul);box.append(fs);
   // invites and plans
-  var ps=text('section');ps.append(text('h4',null,T('Your plans')));var pl=text('ul','list');
+  var ps=text('section');ps.dataset.tab='friends';ps.append(text('h4',null,T('Your plans')));var pl=text('ul','list');
   (d.invites||[]).forEach(function(r){var li=text('li');li.append(text('span',null,T("{name} invited you",{name:r.host})),btn(T('Open'),'vote',function(){location.href='/r/'+r.id}));pl.append(li)});
   (d.rooms||[]).forEach(function(r){var li=text('li');li.append(text('span',null,(r.other?T("With {name}",{name:r.other}):T("Waiting for your friend"))+(r.planned?' · '+T("planned"):'')),btn(T('Open'),'vote',function(){location.href='/r/'+r.id}));pl.append(li)});
   if(!pl.childNodes.length)pl.append(text('li','muted',T('Plans you make on two phones appear here for 48 hours.')));ps.append(pl);box.append(ps);
   // places you've been
-  var vs=text('section');var nt=document.createElement('label');nt.style.cssText='display:flex;gap:10px;align-items:flex-start;text-transform:none;letter-spacing:0;font-size:14px;color:var(--dark);font-weight:600';var cb=document.createElement('input');cb.type='checkbox';cb.style.cssText='width:auto;margin-top:3px';cb.checked=noticer.on;
+  var vs=text('section');vs.dataset.tab='been';var nt=document.createElement('label');nt.style.cssText='display:flex;gap:10px;align-items:flex-start;text-transform:none;letter-spacing:0;font-size:14px;color:var(--dark);font-weight:600';var cb=document.createElement('input');cb.type='checkbox';cb.style.cssText='width:auto;margin-top:3px';cb.checked=noticer.on;
   cb.addEventListener('change',function(){noticer.on=cb.checked;store.set('tb-notice',cb.checked?'1':'0');cb.checked?startNotice():stopNotice()});
   nt.append(cb,text('span',null,T('Notice where I go. While TasteBridge is open, it asks “Are you at …?” when you are at a place from your plan, and notes how long you stay. Your location stays on this phone; only the place you confirm is saved.')));vs.append(nt);
   vs.append(text('h4',null,T('Places you’ve been')),text('p','muted',T('Tap “Been here ✓” on a plan, or answer “How was it?” after a night out. TasteBridge then suggests somewhere new first and never suggests places you marked 👎 again.')));var vl=text('ul','list');
@@ -72,18 +77,22 @@ function profileSheet(){refreshAccount().then(function(d){if(!me)return authShee
     act.append(btn('✕','vote',function(){api('/api/account/visits/remove',{method:'POST',body:{id:v.id}}).then(profileSheet)}));li.append(act);vl.append(li)});
   if(!(d.visits||[]).length)vl.append(text('li','muted',T('Nothing yet.')));vs.append(vl);box.append(vs);
   // saved plans
-  var sp=text('section');sp.append(text('h4',null,T('Saved plans')));var sl=text('ul','list');
+  var sp=text('section');sp.dataset.tab='been';sp.append(text('h4',null,T('Saved plans')));var sl=text('ul','list');
   (d.plans||[]).forEach(function(pl){var li=text('li');li.append(text('span',null,pl.title+' · '+day(pl.created)));var act=text('span');act.append(btn(T('Open'),'vote',function(){api('/api/account/plans/'+pl.id).then(function(r){dialog.close();show(r.plan)})}),btn('✕','vote',function(){api('/api/account/plans/remove',{method:'POST',body:{id:pl.id}}).then(profileSheet)}));li.append(act);sl.append(li)});
   if(!(d.plans||[]).length)sl.append(text('li','muted',T('Plans you make while signed in are kept here (the latest 30).')));sp.append(sl);box.append(sp);
   // password and recovery
-  var sec=text('section');sec.append(text('h4',null,T('Password')));var pf=document.createElement('form');var cur=input('password','',{autocomplete:'current-password',placeholder:T('Current password')}),nxt=input('password','',{autocomplete:'new-password',minlength:'8',placeholder:T('New password')});var perr=errorLine();var prow=text('div','bar-row');var pgo=text('button','btn',T('Change password'));pgo.type='submit';
+  var sec=text('section');sec.dataset.tab='settings';sec.append(text('h4',null,T('Password')));var pf=document.createElement('form');var cur=input('password','',{autocomplete:'current-password',placeholder:T('Current password')}),nxt=input('password','',{autocomplete:'new-password',minlength:'8',placeholder:T('New password')});var perr=errorLine();var prow=text('div','bar-row');var pgo=text('button','btn',T('Change password'));pgo.type='submit';
   prow.append(btn(T('New recovery code'),'btn',function(){var pw=prompt(T('Type your password to get a new recovery code.'));if(!pw)return;api('/api/account/recovery-code',{method:'POST',body:{password:pw}}).then(function(r){codeSheet(r.recoveryCode,false)}).catch(function(x){perr.textContent=x.message})}),pgo);
   pf.append(cur,nxt,perr,prow);cur.style.marginBottom='8px';pf.addEventListener('submit',function(e){e.preventDefault();api('/api/account/password',{method:'POST',body:{current:cur.value,password:nxt.value}}).then(function(){perr.textContent=T('Password changed. Other devices were signed out.');cur.value='';nxt.value=''}).catch(function(x){perr.textContent=x.message})});
-  sec.append(pf);box.append(sec);
-  // sign out, delete
-  var end=text('section');var row3=text('div','bar-row');
-  row3.append(btn(T('Delete account'),'btn',function(){var pw=prompt(T('Type your password to delete your account and all its data.'));if(!pw)return;api('/api/account/delete',{method:'POST',body:{password:pw}}).then(function(){dialog.close();location.reload()}).catch(function(x){alert(x.message)})}));
-  row3.append(btn(T('Sign out'),'btn',function(){api('/api/account/logout',{method:'POST'}).then(function(){dialog.close();location.reload()})}),btn(T('Close'),'btn primary',function(){dialog.close()}));end.append(row3);box.append(end)})})}
+  var del=text('div','bar-row');del.style.justifyContent='flex-start';del.append(btn(T('Delete account'),'btn',function(){var pw=prompt(T('Type your password to delete your account and all its data.'));if(!pw)return;api('/api/account/delete',{method:'POST',body:{password:pw}}).then(function(){dialog.close();location.reload()}).catch(function(x){alert(x.message)})}));
+  sec.append(pf,del);box.append(sec);
+  // sign out and close stay on every tab
+  var end=text('section');end.dataset.tab='all';var row3=text('div','bar-row');
+  row3.append(btn(T('Sign out'),'btn',function(){api('/api/account/logout',{method:'POST'}).then(function(){dialog.close();location.reload()})}),btn(T('Close'),'btn primary',function(){dialog.close()}));end.append(row3);box.append(end);
+  var waiting=(d.friends||[]).filter(function(x){return x.status==='received'}).length+(d.invites||[]).length;
+  var TABS=[['me',T('Profile')],['friends',T('Friends')+(waiting?' ('+waiting+')':'')],['been',T('Places')],['settings',T('Account')]];
+  var setTab=function(t){profileTab=t;box.querySelectorAll('[data-tab]').forEach(function(x){x.hidden=x.dataset.tab!==t&&x.dataset.tab!=='all'});tabsRow.querySelectorAll('button').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.t===t))})};
+  TABS.forEach(function(t){var b=btn(t[1],'mode',function(){setTab(t[0])});b.dataset.t=t[0];tabsRow.append(b)});setTab(profileTab)})})}
 el('accountBtn').addEventListener('click',function(){me?profileSheet():authSheet('login')});
 el('memoriesBtn').addEventListener('click',function(){memoriesSheet('all')});
 
@@ -119,7 +128,7 @@ function memoryCard(x,filter){var c=text('article','mem');if(x.photo){var im=doc
 function settingsFromForm(){var near=window.tbNear&&window.tbNear();return{mode:form.dataset.show==='plan'?'plan':'evening',city:el('city').value,lat:near&&near.lat,lon:near&&near.lon,start:el('start').value,day:['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][new Date().getDay()],cuisine:el('cuisine').value,mood:window.tbMood?window.tbMood():'',budget:el('budget').value,occasion:window.tbOccasion?window.tbOccasion():'dinner',special:window.tbSpecial?window.tbSpecial():''}}
 function startRoom(friendUsername){notice.className='notice';var fav=el('first').value.trim();if(fav.length<2){notice.textContent=T('Type your favorite first, then invite your friend.');notice.className='notice show';el('first').focus();return}
   roomBox.hidden=false;roomBox.replaceChildren();roomBox.append(text('div','step',T('Plan on two phones')),text('h3',null,friendUsername?T("Planning with {name}",{name:friendUsername}):T("Invite your friend")),text('p',null,T('Your friend opens the link on their own phone and adds their favorite. Neither of you sees the other’s pick until the plan is ready.')));
-  var row=text('div','row');var nm=input('text',me?me.display:store.get('tb-name')||'',{placeholder:T('Your name (shown to your friend)'),maxlength:'40'});var go=btn(T('Create invite'),'btn primary',function(){go.disabled=true;store.set('tb-name',nm.value);api('/api/rooms',{method:'POST',body:{name:nm.value,favorite:fav,pick:el('first').dataset.pick||undefined,settings:settingsFromForm(),invite:friendUsername||undefined}}).then(function(r){roomToken=r.token;store.set('tb-room-'+r.id,r.token);history.pushState(null,'','/r/'+r.id);openRoom(r.id)}).catch(function(x){notice.textContent=x.message;notice.className='notice show';go.disabled=false})});
+  var row=text('div','row');var nm=input('text',me?me.display:store.get('tb-name')||'',{placeholder:T('Your name (shown to your friend)'),maxlength:'40'});var go=btn(T('Create invite'),'btn primary',function(){go.disabled=true;store.set('tb-name',nm.value);api('/api/rooms',{method:'POST',body:{name:nm.value,favorite:fav,pick:el('first').dataset.pick||undefined,profile:window.tbProfile&&window.tbProfile()||undefined,settings:settingsFromForm(),invite:friendUsername||undefined}}).then(function(r){roomToken=r.token;store.set('tb-room-'+r.id,r.token);history.pushState(null,'','/r/'+r.id);openRoom(r.id)}).catch(function(x){notice.textContent=x.message;notice.className='notice show';go.disabled=false})});
   row.append(nm,go,btn(T('Cancel'),'btn',function(){roomBox.hidden=true}));roomBox.append(row);roomBox.scrollIntoView({behavior:'smooth',block:'start'})}
 el('twoPhones').addEventListener('click',function(){startRoom(null)});
 
@@ -133,8 +142,12 @@ function renderRoom(v){roomView=v;var host=v.members[0],friend=v.members[1];var 
   var head=text('div','row');head.style.justifyContent='space-between';head.style.marginTop='0';head.append(text('div','step',T('Plan on two phones')),btn(T('Leave this plan'),'vote',leaveRoom));roomBox.append(head);
   var people=text('div','people');v.members.forEach(function(m){people.append(text('span','person',(m.slot===you?T('You'):m.name)+(m.favorite?' · '+m.favorite:'')+' ✓'))});if(!friend)people.append(text('span','person wait',T('Waiting for your friend…')));
   if(v.canJoin){roomBox.append(text('h3',null,T("{name} invited you to plan {what}",{name:host.name,what:what})),text('p',null,T("Add one thing you love: an artist, film, book, show or game. {name} will not see it until the plan is ready.",{name:host.name})));
-    var f=document.createElement('form');f.className='row';var nm=input('text',me?me.display:store.get('tb-name')||'',{placeholder:T('Your name'),maxlength:'40'}),fav=input('text',me&&me.favorite||'',{placeholder:T('You love… e.g. Daft Punk'),maxlength:'70',required:'',autocomplete:'off'});var favWrap=document.createElement('div');favWrap.className='field';favWrap.style.cssText='flex:1 1 220px;padding:0;background:transparent;border:0';favWrap.append(fav);setTimeout(function(){window.attachSuggest&&window.attachSuggest(fav)},0);var go=text('button','btn primary',T('Join'));go.type='submit';f.append(nm,favWrap,go);
-    f.addEventListener('submit',function(e){e.preventDefault();go.disabled=true;store.set('tb-name',nm.value);api('/api/rooms/'+roomId+'/join',{method:'POST',body:{name:nm.value,favorite:fav.value,pick:fav.dataset.pick||undefined}}).then(function(r){roomToken=r.token;store.set('tb-room-'+roomId,r.token);load()}).catch(function(x){notice.textContent=x.message;notice.className='notice show';go.disabled=false})});
+    var f=document.createElement('form');f.className='row';var nm=input('text',me?me.display:store.get('tb-name')||'',{placeholder:T('Your name'),maxlength:'40'}),fav=input('text',me&&me.favorite||'',{placeholder:T('You love… e.g. Daft Punk'),maxlength:'70',required:'',autocomplete:'off'});var favWrap=document.createElement('div');favWrap.className='field';favWrap.style.cssText='flex:1 1 220px;padding:0;background:transparent;border:0';favWrap.append(fav);setTimeout(function(){window.attachSuggest&&window.attachSuggest(fav)},0);var go=text('button','btn primary',T('Join'));go.type='submit';
+    // Someone with a taste profile on this phone can join with it instead of typing one favorite.
+    var prof=window.tbProfileAny&&window.tbProfileAny(),useProf=null;if(prof){var lab=document.createElement('label');lab.className='use-profile';useProf=document.createElement('input');useProf.type='checkbox';useProf.checked=true;
+      var sync=function(){favWrap.hidden=useProf.checked;fav.required=!useProf.checked};useProf.addEventListener('change',sync);lab.append(useProf,text('span',null,T('✨ Use my taste profile')+' · '+window.tbProfileLabel()));sync();f.append(lab)}
+    f.append(nm,favWrap,go);
+    f.addEventListener('submit',function(e){e.preventDefault();go.disabled=true;store.set('tb-name',nm.value);api('/api/rooms/'+roomId+'/join',{method:'POST',body:useProf&&useProf.checked?{name:nm.value,favorite:window.tbProfileLabel(),profile:prof}:{name:nm.value,favorite:fav.value,pick:fav.dataset.pick||undefined}}).then(function(r){roomToken=r.token;store.set('tb-room-'+roomId,r.token);load()}).catch(function(x){notice.textContent=x.message;notice.className='notice show';go.disabled=false})});
     roomBox.append(f);roomBox.scrollIntoView({block:'start'});return}
   if(you==null){roomBox.append(text('h3',null,T('This plan is full')),text('p',null,T("Two people have already joined. Ask {name} for a new invite.",{name:host.name})));return}
   roomBox.append(text('h3',null,v.plan?T('Your shared plan is ready'):friend?T('Both of you are in'):T('Send this invite to your friend')),people);
