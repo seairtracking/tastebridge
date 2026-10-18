@@ -2,10 +2,20 @@
 
 **A Qloo-powered planning agent for people with different tastes: fair plans, with evidence.**
 
-One friend loves Studio Ghibli, the other lives for Daft Punk. TasteBridge takes one cultural favorite
-from each person, a city and an occasion (dinner, drinks, coffee, culture or a night out), and finds a
-**fair compromise**: places to go together and films to watch. Every pick shows **how much it is driven
-by each person**, using Qloo explainability, so nobody's taste quietly wins.
+Two people finish work. One loves Studio Ghibli, the other lives for Daft Punk. Where do they eat, where
+do they go after, and what do they watch at home? TasteBridge takes one cultural favorite from each
+person and plans **a whole evening that is fair to both**: dinner by cuisine and mood, a second stop a
+short walk away, a live music or show venue, and a film for home. Every pick shows **how much it is
+driven by each person**, using Qloo explainability, so nobody's taste quietly wins.
+
+Two ways to use it:
+
+- **Tonight's plan:** a timeline for the evening. Pick a start time, what to eat, a mood (romantic,
+  cozy, lively, quiet, chill) and a budget, and type a city or tap **Use my location**.
+- **Quick shortlist:** four fair places for one occasion (dinner, drinks, coffee, culture or a night out).
+
+It runs in the browser and **installs like an app** on iPhone (Share → Add to Home Screen) and Android
+(Install app).
 
 - **Live demo:** https://tastebridge.trackingport.com
 - **Demo video (1:44):** https://youtu.be/WYHLv6PQkuU
@@ -36,7 +46,12 @@ app streams each step live:
 6. **Show each person's share.** Each place and film carries an A/B split from Qloo explainability.
    Films are the combined-taste results closest to an even split; when there is almost no shared film
    taste, the agent picks one film for each person instead of pretending there is overlap.
-7. **Show what you need to decide.** Every place card has a photo, Qloo rating, price level, a map link and
+7. **Plan the evening stop by stop** (Tonight's plan). Dinner is filtered by cuisine and mood; if too
+   few places fit, the agent lets the mood guide the ranking instead of filtering, then widens the area.
+   The second stop and the show are searched **around the dinner spot** with walking time, and every stop
+   prefers places that are open at that hour (when Qloo lists hours) and within budget. Qloo has no event
+   listings, so show venues link to their own programme. Adult entertainment venues are never suggested.
+8. **Show what you need to decide.** Every place card has a photo, Qloo rating, price level, a map link and
    the website; every film has its poster, year and genres. All of it comes from Qloo's entity data.
 
 Without Qloo the app has nothing to rank: no live data means no plan. The UI only offers a clearly
@@ -64,10 +79,11 @@ Tools:
 | Tool | Input | Output |
 |---|---|---|
 | `find_common_ground` | `first`, `second`, `city`, `occasion` (`dinner`, `drinks`, `coffee`, `culture`, `night-out`) | A readable summary plus the full plan as `structuredContent` (places with shares, films, the agent's steps) |
+| `plan_evening` | `first`, `second`, `city` or `lat`/`lon`, optional `start`, `day`, `cuisine`, `mood`, `budget` | A timeline (dinner, second stop with walking time, show, film) plus the full plan as `structuredContent` |
 | `resolve_favorite` | `name` | The top Qloo readings of a favorite with their types |
 
-Try: *"My partner loves Wes Anderson films, I love Arctic Monkeys. Find us somewhere for drinks in London
-that is fair to both."*
+Try: *"My partner loves Wes Anderson films, I love Arctic Monkeys. Plan us a cozy evening in London from
+6 pm, Italian food, not too expensive."*
 
 ## Reliability
 
@@ -79,8 +95,9 @@ arrive from a few shared provider addresses).
 
 ## Privacy
 
-Only the two public cultural favorites, the city and the occasion are sent to the server for that
-request. No accounts, no stored profiles. Qloo returns aggregate cultural associations; TasteBridge does
+Only the two public cultural favorites, the city or location, and the evening choices are sent to the
+server for that request. **Use my location** is optional, asks the browser's permission, is rounded to
+about 10 m in the browser before it is sent, and is not stored. No accounts, no stored profiles. Qloo returns aggregate cultural associations; TasteBridge does
 not infer anyone's identity or sensitive traits.
 
 ## Run it
@@ -105,15 +122,19 @@ npm test                  # unit tests (mocked Qloo, no key needed)
 |---|---|---|
 | `/` | GET | The web app |
 | `/api/plan` | POST | `{"first", "second", "city", "occasion"}` → the plan as JSON. With `Accept: application/x-ndjson` it streams `{"event":"step"}` lines as the agent works, then `{"event":"result"}` |
+| `/api/evening` | POST | `{"first", "second", "city" or "lat"/"lon", "start", "day", "cuisine", "mood", "budget"}` → the evening plan, streamed the same way |
 | `/mcp` | POST | MCP endpoint (JSON-RPC: `initialize`, `tools/list`, `tools/call`, `ping`) |
 | `/api/status` | GET | `{"live": true, ...}` when a Qloo key is configured |
 | `/health` | GET | Health check |
+| `/manifest.webmanifest`, `/sw.js`, `/icon-*.png` | GET | Installable app (PWA) |
 
 ## Project layout
 
 ```
 worker/index.js     Routes, NDJSON streaming, cache and per-client rate limit (Workers-style fetch handler)
 worker/engine.js    The planning agent: signal check, search rounds, refinement, fairness ranking, films
+worker/evening.js   Tonight's plan: dinner, a nearby second stop, a show, walking time and opening hours
+worker/app.js       Installable app: manifest, service worker and icons
 worker/qloo.js      Qloo client: entity parsing, explainability, request queue and 429 retries
 worker/mcp.js       MCP server: tool definitions and JSON-RPC handling
 worker/page.js      The web app (single page, no build step)
