@@ -2,6 +2,8 @@
 // without a store the app still works fully for guests on one phone.
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 
 const DAY = 86400000;
 export const SESSION_DAYS = 30;
@@ -30,6 +32,25 @@ export function checkPassword(password, stored) {
   const actual = scryptSync(password, Buffer.from(salt, 'base64'), expected.length);
   return timingSafeEqual(actual, expected);
 }
+export const PHOTO_MAX = 3 * 1024 * 1024;
+// Removes APP1 (EXIF and XMP, which can hold GPS), APP13 (IPTC) and comments from a JPEG; returns null if it is not a JPEG.
+export function stripJpeg(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return null;
+  const out = [buf.subarray(0, 2)];
+  let i = 2;
+  while (i + 4 <= buf.length) {
+    if (buf[i] !== 0xff) return null;
+    const marker = buf[i + 1];
+    if (marker === 0xda) { out.push(buf.subarray(i)); return Buffer.concat(out); } // start of scan: image data follows
+    const len = buf.readUInt16BE(i + 2);
+    if (len < 2 || i + 2 + len > buf.length) return null;
+    if (marker !== 0xe1 && marker !== 0xed && marker !== 0xfe) out.push(buf.subarray(i, i + 2 + len));
+    i += 2 + len;
+  }
+  return null;
+}
+const PHOTO_NAME = /^[A-Za-z0-9_-]{32}\.jpg$/;
+
 const DUMMY = hashPassword(randomBytes(12).toString('hex')); // keeps login timing equal for unknown names
 
 const SCHEMA = `
@@ -60,6 +81,11 @@ CREATE TABLE IF NOT EXISTS visits (
   rating INTEGER NOT NULL DEFAULT 0 CHECK (rating IN (-1, 0, 1)),
   visited INTEGER NOT NULL,
   minutes INTEGER,
+  lat REAL,
+  lon REAL,
+  note TEXT NOT NULL DEFAULT '',
+  photo TEXT,
+  shared INTEGER NOT NULL DEFAULT 0,
   UNIQUE (user_id, place_id)
 );
 CREATE TABLE IF NOT EXISTS saved_plans (
@@ -116,11 +142,19 @@ CREATE TABLE IF NOT EXISTS votes (
 );
 `;
 
-export function openStore(path, now = () => Date.now()) {
+export function openStore(path, now = () => Date.now(), { photosDir = path === ':memory:' ? null : join(dirname(path), 'photos') } = {}) {
   const db = new DatabaseSync(path);
+  if (photosDir) mkdirSync(photosDir, { recursive: true });
+  const memPhotos = new Map(); // in-memory databases (tests) keep photos in memory too
+  const writePhoto = (name, buf) => (photosDir ? writeFileSync(join(photosDir, name), buf, { mode: 0o600 }) : memPhotos.set(name, buf));
+  const readPhoto = (name) => { try { return photosDir ? readFileSync(join(photosDir, name)) : memPhotos.get(name) || null; } catch { return null; } };
+  const dropPhoto = (name) => { if (!name || !PHOTO_NAME.test(name)) return; if (photosDir) rmSync(join(photosDir, name), { force: true }); else memPhotos.delete(name); };
   db.exec(SCHEMA);
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'recovery')) db.exec('ALTER TABLE users ADD COLUMN recovery TEXT');
-  if (!db.prepare('PRAGMA table_info(visits)').all().some((c) => c.name === 'minutes')) db.exec('ALTER TABLE visits ADD COLUMN minutes INTEGER');
+  const visitCols = db.prepare('PRAGMA table_info(visits)').all().map((c) => c.name);
+  for (const [col, type] of [['minutes', 'INTEGER'], ['lat', 'REAL'], ['lon', 'REAL'], ['note', "TEXT NOT NULL DEFAULT ''"], ['photo', 'TEXT'], ['shared', 'INTEGER NOT NULL DEFAULT 0']]) {
+    if (!visitCols.includes(col)) db.exec(`ALTER TABLE visits ADD COLUMN ${col} ${type}`);
+  }
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
@@ -195,6 +229,7 @@ export function openStore(path, now = () => Date.now()) {
       db.exec('BEGIN');
       try {
         for (const { room_id } of all('SELECT room_id FROM members WHERE user_id = ? AND slot = 0', userId)) run('DELETE FROM rooms WHERE id = ?', room_id);
+        for (const { photo } of all('SELECT photo FROM visits WHERE user_id = ? AND photo IS NOT NULL', userId)) dropPhoto(photo);
         run('DELETE FROM users WHERE id = ?', userId);
         db.exec('COMMIT');
       } catch (e) { db.exec('ROLLBACK'); throw e; }
@@ -204,15 +239,61 @@ export function openStore(path, now = () => Date.now()) {
     // ---- places you have been, and plans you made ----
     // `minutes` (how long you stayed) is filled in later when the app noticed you leaving.
     addVisit(userId, place, withName = '', minutes = null) {
-      run(`INSERT INTO visits (user_id, place_id, name, address, category, image, map, with_name, visited, minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      const lat = Number.isFinite(place.lat) ? place.lat : null, lon = Number.isFinite(place.lon) ? place.lon : null;
+      run(`INSERT INTO visits (user_id, place_id, name, address, category, image, map, with_name, visited, minutes, lat, lon) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (user_id, place_id) DO UPDATE SET visited = CASE WHEN excluded.minutes IS NULL THEN excluded.visited ELSE visits.visited END,
-          with_name = CASE WHEN excluded.with_name != '' THEN excluded.with_name ELSE visits.with_name END, minutes = COALESCE(excluded.minutes, visits.minutes)`,
-        userId, place.id, place.name, place.address || '', place.category || '', place.image || null, place.map || null, withName, now(), minutes);
+          with_name = CASE WHEN excluded.with_name != '' THEN excluded.with_name ELSE visits.with_name END, minutes = COALESCE(excluded.minutes, visits.minutes),
+          lat = COALESCE(excluded.lat, visits.lat), lon = COALESCE(excluded.lon, visits.lon)`,
+        userId, place.id, place.name, place.address || '', place.category || '', place.image || null, place.map || null, withName, now(), minutes, lat, lon);
     },
     rateVisit(userId, visitId, rating) { return run('UPDATE visits SET rating = ? WHERE id = ? AND user_id = ?', rating, visitId, userId).changes > 0; },
-    removeVisit(userId, visitId) { return run('DELETE FROM visits WHERE id = ? AND user_id = ?', visitId, userId).changes > 0; },
+    removeVisit(userId, visitId) {
+      const v = one('SELECT photo FROM visits WHERE id = ? AND user_id = ?', visitId, userId);
+      if (!v) return false;
+      dropPhoto(v.photo);
+      return run('DELETE FROM visits WHERE id = ? AND user_id = ?', visitId, userId).changes > 0;
+    },
+    // ---- memories: a note, a photo and whether friends can see this check-in ----
+    setMemory(userId, visitId, { note, shared }) {
+      return run('UPDATE visits SET note = ?, shared = ? WHERE id = ? AND user_id = ?', note, shared ? 1 : 0, visitId, userId).changes > 0;
+    },
+    savePhoto(userId, visitId, buf) {
+      const v = one('SELECT photo FROM visits WHERE id = ? AND user_id = ?', visitId, userId);
+      if (!v) throw new Error('Check-in not found.');
+      if (buf.length > PHOTO_MAX) throw new Error('Photos can be up to 3 MB.');
+      const clean = stripJpeg(buf);
+      if (!clean) throw new Error('Upload a JPEG photo.');
+      const name = randomBytes(24).toString('base64url') + '.jpg';
+      writePhoto(name, clean);
+      run('UPDATE visits SET photo = ? WHERE id = ?', name, visitId);
+      dropPhoto(v.photo);
+      return name;
+    },
+    removePhoto(userId, visitId) {
+      const v = one('SELECT photo FROM visits WHERE id = ? AND user_id = ?', visitId, userId);
+      if (!v) return false;
+      dropPhoto(v.photo);
+      return run('UPDATE visits SET photo = NULL WHERE id = ?', visitId).changes > 0;
+    },
+    // A photo is visible to its owner, and to accepted friends when that check-in is shared.
+    photo(name, viewerId) {
+      if (!PHOTO_NAME.test(String(name)) || !viewerId) return null;
+      const v = one('SELECT user_id, shared FROM visits WHERE photo = ?', name);
+      if (!v) return null;
+      if (v.user_id !== viewerId && !(v.shared && this.areFriends(viewerId, v.user_id))) return null;
+      return readPhoto(name);
+    },
+    memoriesOf(userId) {
+      const mine = all(`SELECT id, place_id AS placeId, name, address, category, map, with_name AS withName, rating, visited, minutes, lat, lon, note, photo, shared
+        FROM visits WHERE user_id = ? ORDER BY visited DESC LIMIT 500`, userId);
+      const friends = all(`SELECT v.id, v.place_id AS placeId, v.name, v.address, v.category, v.map, v.rating, v.visited, v.lat, v.lon, v.note, v.photo, u.display AS friend, u.username
+        FROM visits v JOIN users u ON u.id = v.user_id
+        JOIN friends f ON f.status = 'accepted' AND ((f.a = ? AND f.b = v.user_id) OR (f.b = ? AND f.a = v.user_id))
+        WHERE v.shared = 1 ORDER BY v.visited DESC LIMIT 500`, userId, userId);
+      return { mine, friends };
+    },
     visitsOf(userId, limit = 100) {
-      return all('SELECT id, place_id AS placeId, name, address, category, image, map, with_name AS withName, rating, visited, minutes FROM visits WHERE user_id = ? ORDER BY visited DESC LIMIT ?', userId, limit);
+      return all('SELECT id, place_id AS placeId, name, address, category, image, map, with_name AS withName, rating, visited, minutes, note, photo, shared FROM visits WHERE user_id = ? ORDER BY visited DESC LIMIT ?', userId, limit);
     },
     // Place ids the agent should treat as "been there" (1) or "not for us" (-1) for these people.
     seenBy(userIds) {

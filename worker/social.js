@@ -48,7 +48,19 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const webUrl = (u) => { try { const x = new URL(String(u)); return x.protocol === 'https:' || x.protocol === 'http:' ? x.href.slice(0, 500) : null; } catch { return null; } };
 function cleanPlace(p) {
   if (!p || !UUID.test(String(p.id || '')) || !tidy(p.name, 100)) return null;
-  return { id: String(p.id), name: tidy(p.name, 100), address: tidy(p.address, 140), category: tidy(p.category, 60), image: p.image ? webUrl(p.image) : null, map: p.map ? webUrl(p.map) : null };
+  const lat = Number(p.lat), lon = Number(p.lon), ok = Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+  return { id: String(p.id), name: tidy(p.name, 100), address: tidy(p.address, 140), category: tidy(p.category, 60), image: p.image ? webUrl(p.image) : null, map: p.map ? webUrl(p.map) : null, lat: ok ? lat : null, lon: ok ? lon : null };
+}
+
+// A check-in photo: JPEG only, up to 3 MB, metadata (including GPS) stripped before it is stored.
+async function uploadPhoto(request, store, allow, visitId) {
+  const me = store.sessionUser(cookie(request, COOKIE));
+  if (!me) return fail('Please sign in.', 401);
+  if (!allow(request, 30, 'photo')) return fail('Too many uploads. Try again later.', 429);
+  if (!/^image\/jpeg\b/.test(request.headers.get('content-type') || '')) return fail('Upload a JPEG photo.', 415);
+  if (Number(request.headers.get('content-length') || 0) > 3 * 1024 * 1024) return fail('Photos can be up to 3 MB.', 413);
+  const buf = Buffer.from(await request.arrayBuffer());
+  try { return json({ photo: '/api/photos/' + store.savePhoto(me.id, visitId, buf) }); } catch (e) { return fail(e.message, 400); }
 }
 
 // Every option in a plan that people can vote on, keyed by its Qloo id.
@@ -61,6 +73,14 @@ export async function handleSocial(request, env, { allow, runPlan }) {
   const store = env.STORE;
   if (!store) return fail('Accounts and shared plans need the TasteBridge Node server.', 503);
   if (!sameOrigin(request)) return fail('Cross-site request blocked.', 403);
+  const photoUpload = request.method === 'POST' && /^\/api\/account\/visits\/\d+\/photo$/.test(url.pathname);
+  if (photoUpload) return uploadPhoto(request, store, allow, Number(url.pathname.split('/')[4]));
+  if (url.pathname.startsWith('/api/photos/') && request.method === 'GET') {
+    const viewer = store.sessionUser(cookie(request, COOKIE));
+    const buf = viewer ? store.photo(url.pathname.slice('/api/photos/'.length), viewer.id) : null;
+    if (!buf) return fail('Photo not found.', 404);
+    return new Response(buf, { headers: { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'" } });
+  }
   if (Number(request.headers.get('content-length') || 0) > 4000) return fail('Request is too large.', 413);
   let body = {};
   if (request.method !== 'GET') {
@@ -152,6 +172,16 @@ export async function handleSocial(request, env, { allow, runPlan }) {
       return json({ ok: store.rateVisit(me.id, Number(body.id), rating) });
     }
     if (action === 'visits/remove' && request.method === 'POST') return json({ ok: store.removeVisit(me.id, Number(body.id)) });
+    let mm;
+    if ((mm = /^visits\/(\d+)\/memory$/.exec(action)) && request.method === 'POST') {
+      return json({ ok: store.setMemory(me.id, Number(mm[1]), { note: tidy(body.note, 280), shared: body.shared === true }) });
+    }
+    if ((mm = /^visits\/(\d+)\/photo\/remove$/.exec(action)) && request.method === 'POST') return json({ ok: store.removePhoto(me.id, Number(mm[1])) });
+    if (action === 'memories' && request.method === 'GET') {
+      const url = (x) => ({ ...x, photo: x.photo ? '/api/photos/' + x.photo : null });
+      const { mine, friends } = store.memoriesOf(me.id);
+      return json({ mine: mine.map(url), friends: friends.map(url) });
+    }
     if (action.startsWith('plans/') && request.method === 'GET') {
       const plan = store.savedPlan(me.id, Number(action.slice(6)));
       return plan ? json({ plan }) : fail('Plan not found.', 404);

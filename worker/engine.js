@@ -51,7 +51,7 @@ export function inCity(address, key) {
 export function placeDetails(x) {
   const query = [x.name, x.address].filter(Boolean).join(', ') || (x.lat != null ? `${x.lat},${x.lon}` : '');
   return {
-    image: x.image || null, rating: x.rating ?? null, price: x.price ?? null, website: x.website || null,
+    image: x.image || null, rating: x.rating ?? null, price: x.price ?? null, website: x.website || null, lat: x.lat ?? null, lon: x.lon ?? null,
     map: query ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(query) : null,
   };
 }

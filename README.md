@@ -35,6 +35,10 @@ Two ways to use it:
   the app after a plan. Your history (with date, who you went with, ❤️ or 👎) shapes the next plan: places
   you have been are marked and move down so somewhere new comes first, and places you rated 👎 are never
   suggested again. Signed-in plans are saved (the latest 30) and can be reopened.
+- **Memories:** every place you have been on one map, each with an optional photo and note. Share a
+  memory with friends who accepted you and see theirs on the same map. Photos are re-encoded on the
+  phone and stripped of EXIF/XMP metadata (including GPS) on the server, stored outside the code folder,
+  and served only to their owner and, for shared memories, to accepted friends.
 - **Account recovery without email:** sign-up shows a one-time recovery code; **Forgot password?** uses it
   to set a new password, and **Change password** is in your profile. Both sign out your other devices.
 
@@ -170,6 +174,7 @@ npm test                  # unit tests (mocked Qloo, no key needed)
 | `/api/rooms` | POST | Create a two-phone plan: `{"name", "favorite", "settings"}` → `{id, token, url}` |
 | `/api/rooms/:id` | GET | Room state for the `x-room-token` holder (favorites hidden until the plan exists) |
 | `/api/rooms/:id/join`, `/plan`, `/vote` | POST | Join with your own favorite, run the plan (streamed), vote on an option |
+| `/api/account/memories`, `/api/account/visits/:id/memory`, `/api/account/visits/:id/photo`, `/api/photos/:name` | GET / POST | Memories map, notes, sharing and photos (JPEG, up to 3 MB) |
 | `/api/account`, `/api/account/signup`, `/login`, `/logout`, `/profile`, `/friends`, `/friends/accept`, `/friends/remove`, `/delete` | GET / POST / PUT | Optional accounts, profile and friends |
 | `/mcp` | POST | MCP endpoint (JSON-RPC: `initialize`, `tools/list`, `tools/call`, `ping`) |
 | `/api/status` | GET | `{"live": true, ...}` when a Qloo key is configured |

@@ -14,10 +14,10 @@ var CUISINES=[['','Anything']].concat(['vietnamese','japanese','korean','chinese
 var MOODS=[['','Any'],['romantic','Romantic'],['cozy','Cozy'],['lively','Lively'],['quiet','Quiet'],['chill','Chill']];
 
 // ---------- header + profile defaults ----------
-function refreshAccount(){return api('/api/account').then(function(d){me=d.user;friends=d.friends||[];el('accountBtn').textContent=me?me.display+' ▾':'Sign in';if(me){el('firstLabel').textContent='You ('+me.display+') love';if(!el('first').value&&me.favorite)el('first').value=me.favorite;if(!el('city').value&&me.city)el('city').value=me.city;if(me.cuisine&&!el('cuisine').value)el('cuisine').value=me.cuisine}else el('firstLabel').textContent='You love';return d}).catch(function(){el('accountBtn').hidden=true;return{}})}
+function refreshAccount(){return api('/api/account').then(function(d){me=d.user;friends=d.friends||[];el('accountBtn').textContent=me?me.display+' ▾':'Sign in';el('memoriesBtn').hidden=!me;if(me){el('firstLabel').textContent='You ('+me.display+') love';if(!el('first').value&&me.favorite)el('first').value=me.favorite;if(!el('city').value&&me.city)el('city').value=me.city;if(me.cuisine&&!el('cuisine').value)el('cuisine').value=me.cuisine}else el('firstLabel').textContent='You love';return d}).catch(function(){el('accountBtn').hidden=true;return{}})}
 
 // ---------- account sheet ----------
-function sheet(build){dialog.replaceChildren();var box=text('div','in');build(box);dialog.append(box);if(!dialog.open)dialog.showModal()}
+function sheet(build){dialog.classList.remove('wide');dialog.replaceChildren();var box=text('div','in');build(box);dialog.append(box);if(!dialog.open)dialog.showModal()}
 function errorLine(){return text('p','err','')}
 function authSheet(tab){sheet(function(box){box.append(text('h3',null,tab==='signup'?'Create your account':'Sign in'),text('p','muted','Optional: TasteBridge works without an account. An account remembers your favorite and lets friends plan with you.'));
   var tabs=text('div','tabs');var a=btn('Sign in','mode',function(){authSheet('login')}),b=btn('Create account','mode',function(){authSheet('signup')});a.setAttribute('aria-pressed',String(tab!=='signup'));b.setAttribute('aria-pressed',String(tab==='signup'));tabs.append(a,b);box.append(tabs);
@@ -82,6 +82,35 @@ function profileSheet(){refreshAccount().then(function(d){if(!me)return authShee
   row3.append(btn('Delete account','btn',function(){var pw=prompt('Type your password to delete your account and all its data.');if(!pw)return;api('/api/account/delete',{method:'POST',body:{password:pw}}).then(function(){dialog.close();location.reload()}).catch(function(x){alert(x.message)})}));
   row3.append(btn('Sign out','btn',function(){api('/api/account/logout',{method:'POST'}).then(function(){dialog.close();location.reload()})}),btn('Close','btn primary',function(){dialog.close()}));end.append(row3);box.append(end)})})}
 el('accountBtn').addEventListener('click',function(){me?profileSheet():authSheet('login')});
+el('memoriesBtn').addEventListener('click',function(){memoriesSheet('all')});
+
+// ---------- memories: every place you have been on a map, with photos, notes and sharing ----------
+function shrink(file){return new Promise(function(ok,bad){var img=new Image();img.onload=function(){var max=1600,k=Math.min(1,max/Math.max(img.width,img.height));var c=document.createElement('canvas');c.width=Math.round(img.width*k);c.height=Math.round(img.height*k);c.getContext('2d').drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(img.src);c.toBlob(function(b){b?ok(b):bad(new Error('Could not read that photo.'))},'image/jpeg',.82)};img.onerror=function(){bad(new Error('Could not read that photo.'))};img.src=URL.createObjectURL(file)})}
+var memMap=null;
+function memoriesSheet(filter){api('/api/account/memories').then(function(d){sheet(function(box){dialog.classList.add('wide');
+  box.append(text('h3',null,'Memories'),text('p','muted','Every place you have been. Add a photo and a note, and share a memory with friends who accepted you. Photos are stripped of hidden location data before they are saved.'));
+  var tabs=text('div','tabs');[['all','All'],['mine','Mine'],['friends','Friends']].forEach(function(t){var b=btn(t[1],'mode',function(){memoriesSheet(t[0])});b.setAttribute('aria-pressed',String(filter===t[0]));tabs.append(b)});box.append(tabs);
+  var items=(filter!=='friends'?d.mine.map(function(x){x.mine=true;return x}):[]).concat(filter!=='mine'?d.friends:[]);
+  var mapBox=text('div','mem-map');box.append(mapBox);var list=text('div','mem-list');box.append(list);
+  if(!items.length)list.append(text('p','muted',filter==='friends'?'No shared memories from friends yet.':'No check-ins yet. Tap “Been here” on a plan, or answer “How was it?” after a night out.'));
+  items.forEach(function(x){list.append(memoryCard(x,filter))});
+  var pts=items.filter(function(x){return x.lat!=null});
+  if(!pts.length){mapBox.replaceChildren(text('p','muted','Places with a location will appear on this map.'));mapBox.style.display='grid';mapBox.style.placeItems='center';return}
+  leaflet().then(function(L){if(memMap){memMap.remove();memMap=null}memMap=L.map(mapBox,{scrollWheelZoom:false});L.tileLayer('https://tile.openstreetmap.de/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap contributors (tiles: openstreetmap.de)'}).addTo(memMap);
+    pts.forEach(function(x){var pop=document.createElement('div');pop.append(text('b',null,x.name));if(!x.mine)pop.append(text('div',null,'via '+x.friend));if(x.note)pop.append(text('div',null,x.note));if(x.photo){var im=document.createElement('img');im.src=x.photo;im.alt='';im.style.cssText='width:160px;border-radius:8px;margin-top:6px;display:block';pop.append(im)}
+      L.marker([x.lat,x.lon],{title:x.name,icon:L.divIcon({className:'',html:'<span class="pin '+(x.mine?'mine':'friend')+'">'+(x.rating>0?'♥':'')+'</span>',iconSize:[28,28],iconAnchor:[14,14]})}).addTo(memMap).bindPopup(pop)});
+    var b=pts.map(function(x){return[x.lat,x.lon]});if(b.length>1)memMap.fitBounds(b,{padding:[30,30],maxZoom:15});else memMap.setView(b[0],15)}).catch(function(){mapBox.replaceChildren(text('p','muted','Map unavailable right now.'))})})}).catch(function(x){alert(x.message)})}
+function memoryCard(x,filter){var c=text('article','mem');if(x.photo){var im=document.createElement('img');im.src=x.photo;im.alt='Photo at '+x.name;im.loading='lazy';c.append(im)}
+  var b=text('div','body');b.append(text('b',null,x.name));if(!x.mine)b.append(text('span','who','Shared by '+x.friend));
+  b.append(text('span','muted',new Date(x.visited).toLocaleDateString()+(x.withName?' · with '+x.withName:'')+(x.minutes?' · '+(x.minutes>=60?Math.floor(x.minutes/60)+' h '+(x.minutes%60)+' min':x.minutes+' min'):'')+(x.rating>0?' · ❤️':x.rating<0?' · 👎':'')));
+  if(!x.mine){if(x.note)b.append(text('p',null,x.note));c.append(b);return c}
+  var note=document.createElement('textarea');note.maxLength=280;note.placeholder='A note about this night…';note.value=x.note||'';
+  var share=document.createElement('label');share.style.cssText='display:flex;gap:6px;align-items:center;font-size:12px;text-transform:none;letter-spacing:0;color:var(--dark);margin:0';var cb=document.createElement('input');cb.type='checkbox';cb.style.width='auto';cb.checked=!!x.shared;share.append(cb,document.createTextNode('Share with friends'));
+  var file=document.createElement('input');file.type='file';file.accept='image/*';file.style.fontSize='12px';
+  var msg=text('span','muted','');var row=text('div','bar-row');row.style.marginTop='4px';
+  row.append(btn('Save','vote',function(){msg.textContent='Saving…';api('/api/account/visits/'+x.id+'/memory',{method:'POST',body:{note:note.value,shared:cb.checked}}).then(function(){var f=file.files&&file.files[0];if(!f)return;return shrink(f).then(function(blob){return fetch('/api/account/visits/'+x.id+'/photo',{method:'POST',headers:{'content-type':'image/jpeg'},body:blob,credentials:'same-origin'}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||'Upload failed.')})})})}).then(function(){memoriesSheet(filter)}).catch(function(e){msg.textContent=e.message})}));
+  if(x.photo)row.append(btn('Remove photo','vote',function(){api('/api/account/visits/'+x.id+'/photo/remove',{method:'POST'}).then(function(){memoriesSheet(filter)})}));
+  b.append(note,file,share,row,msg);c.append(b);return c}
 
 // ---------- two-phone rooms ----------
 function settingsFromForm(){var near=window.tbNear&&window.tbNear();return{mode:form.dataset.show==='plan'?'plan':'evening',city:el('city').value,lat:near&&near.lat,lon:near&&near.lon,start:el('start').value,day:['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][new Date().getDay()],cuisine:el('cuisine').value,mood:window.tbMood?window.tbMood():'',budget:el('budget').value,occasion:window.tbOccasion?window.tbOccasion():'dinner',special:window.tbSpecial?window.tbSpecial():''}}

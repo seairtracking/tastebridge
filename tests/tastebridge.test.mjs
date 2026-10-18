@@ -321,13 +321,15 @@ import { openStore } from "../worker/store.js";
 function client(env) {
   let jar = "";
   return async (path, { method = "GET", body, headers = {}, origin = "http://x" } = {}) => {
+    const raw = body instanceof Uint8Array;
     const res = await worker.fetch(new Request("http://x" + path, {
-      method, body: body && JSON.stringify(body),
-      headers: { "content-type": "application/json", cookie: jar, origin, "x-forwarded-for": "198.51.100." + (Math.random() * 200 | 0), ...headers },
+      method, body: raw ? body : body && JSON.stringify(body),
+      headers: { "content-type": raw ? "image/jpeg" : "application/json", cookie: jar, origin, "x-forwarded-for": "198.51.100." + (Math.random() * 200 | 0), ...headers },
     }), env);
     const set = res.headers.get("set-cookie");
     if (set) jar = set.split(";")[0];
     const type = res.headers.get("content-type") || "";
+    if (type.startsWith("image/")) return { status: res.status, bytes: new Uint8Array(await res.arrayBuffer()) };
     return { status: res.status, cookie: set, data: type.includes("ndjson") ? (await res.text()).trim().split("\n").map((l) => JSON.parse(l)) : await res.json() };
   };
 }
@@ -493,4 +495,32 @@ test("visits remember how long you stayed without changing when you went", async
   assert.equal(v.minutes, 85);
   assert.equal(v.withName, "Bao");
   assert.equal(v.visited, 1_800_000_000_000);
+});
+
+test("memories: photos lose hidden GPS, friends see only shared check-ins, strangers see nothing", async () => {
+  const env = { QLOO_API_KEY: "k", STORE: openStore(":memory:") };
+  const ann = client(env), bob = client(env), cat = client(env);
+  for (const [c, u] of [[ann, "ann"], [bob, "bob"], [cat, "cat"]]) await c("/api/account/signup", { method: "POST", body: { username: u, password: "a good password", display: u } });
+  await ann("/api/account/friends", { method: "POST", body: { username: "bob" } });
+  await bob("/api/account/friends/accept", { method: "POST", body: { username: "ann" } });
+  const place = { id: "00000000-0000-4000-8000-000000000070", name: "Sushi Place", lat: 40.757, lon: -73.9866 };
+  await ann("/api/account/visits", { method: "POST", body: { place } });
+  const visit = (await ann("/api/account/memories")).data.mine[0];
+  assert.equal(visit.lat, 40.757);
+  const gps = new TextEncoder().encode("Exif  GPS 40.7N");
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0, gps.length + 2, ...gps, 0xff, 0xda, 0, 2, 9, 9, 0xff, 0xd9]);
+  const up = await ann(`/api/account/visits/${visit.id}/photo`, { method: "POST", body: jpeg });
+  assert.equal(up.status, 200);
+  assert.equal((await ann(`/api/account/visits/${visit.id}/photo`, { method: "POST", body: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) })).status, 400);
+  assert.equal((await bob(`/api/account/visits/${visit.id}/photo`, { method: "POST", body: jpeg })).status, 400); // not Bob's check-in
+  const own = await ann(up.data.photo);
+  assert.equal(own.status, 200);
+  assert.equal(new TextDecoder().decode(own.bytes).includes("GPS"), false);
+  assert.equal((await bob(up.data.photo)).status, 404); // not shared yet
+  assert.equal((await bob("/api/account/memories")).data.friends.length, 0);
+  await ann(`/api/account/visits/${visit.id}/memory`, { method: "POST", body: { note: "Best omakase", shared: true } });
+  assert.equal((await bob(up.data.photo)).status, 200);
+  assert.deepEqual((await bob("/api/account/memories")).data.friends.map((x) => [x.friend, x.note]), [["ann", "Best omakase"]]);
+  assert.equal((await cat(up.data.photo)).status, 404);
+  assert.equal((await cat("/api/account/memories")).data.friends.length, 0);
 });

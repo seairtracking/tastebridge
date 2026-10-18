@@ -123,7 +123,7 @@ export default {
     if (url.pathname === '/api/status') return json({ live: Boolean(env.QLOO_API_KEY), occasions: Object.keys(OCCASIONS), mcp: url.origin + '/mcp' });
     if (url.pathname === '/api/plan') return planRoute('plan', request, env);
     if (url.pathname === '/api/evening') return planRoute('evening', request, env);
-    if (url.pathname.startsWith('/api/account') || url.pathname.startsWith('/api/rooms')) {
+    if (url.pathname.startsWith('/api/account') || url.pathname.startsWith('/api/rooms') || url.pathname.startsWith('/api/photos/')) {
       return handleSocial(request, env, {
         allow: (req, limit, bucket) => allow(req, limit, bucket),
         // Shared plans stream their steps like the guest planner and are saved to the room when done.
