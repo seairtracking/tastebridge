@@ -751,3 +751,36 @@ test("a quick shortlist for one person has a translation for every step", async 
     globalThis.fetch = realFetch;
   }
 });
+
+test("choosing another dinner re-plans the second stop and the show around it", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fakeEveningQloo(10);
+  try {
+    const p = await evening({ first: "Spirited Away", second: "Daft Punk", city: "New York", start: "18:30", day: "friday" }, "k", "https://hackathon.api.qloo.com");
+    const options = p.stops[0].options;
+    assert.ok(options.length > 1);
+    const other = options.find((o) => o.lat != null && o.id !== options[0].id);
+    const env = { QLOO_API_KEY: "k" };
+    const call = client(env);
+    const body = { favorites: p.seeds.map((s) => s.name), seeds: p.seeds.map((s) => s.id), city: "New York", start: p.start, day: p.day, dinner: { id: other.id, name: other.name, lat: other.lat, lon: other.lon } };
+    const r = await call("/api/evening/around", { method: "POST", body });
+    assert.equal(r.status, 200);
+    assert.equal(r.data.dinner, other.id);
+    assert.equal(r.data.steps[0].t.l.k, "s.around.l");
+    for (const stop of r.data.stops) {
+      assert.ok(["after", "show"].includes(stop.slot));
+      for (const o of stop.options) {
+        assert.notEqual(o.id, other.id); // the dinner itself is never the next stop
+        if (o.walk && o.lat != null) {
+          const dLat = (o.lat - other.lat) * 111320, dLon = (o.lon - other.lon) * 111320 * Math.cos(other.lat * Math.PI / 180);
+          assert.ok(Math.abs(o.walk.metres - Math.hypot(dLat, dLon)) < 50); // walking distance is measured from the chosen dinner
+        }
+      }
+    }
+    // signals must be Qloo ids, and the dinner must have a position
+    assert.equal((await call("/api/evening/around", { method: "POST", body: { ...body, seeds: ["Daft Punk"] } })).status, 422);
+    assert.equal((await call("/api/evening/around", { method: "POST", body: { ...body, dinner: { id: other.id, name: "x" } } })).status, 422);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

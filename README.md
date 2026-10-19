@@ -14,6 +14,9 @@ Two ways to use it:
   cozy, lively, quiet, chill) and a budget, and type a city or tap **Use my location**.
 - **Just me:** tap 👤 on the friend's field to plan for one taste (or one taste profile). Every agent step,
   reason and note has its own one-person wording in all ten languages.
+- **Choose another dinner:** tap "Choose this dinner" on any of the three dinner options and the agent searches
+  the second stop, the show and the weather again around that restaurant (`POST /api/evening/around`), with the
+  same signals and settings.
 - **Quick shortlist:** four fair places for one occasion (dinner, drinks, coffee, culture or a night out).
 - **Special occasions:** birthday, anniversary, first date, date night, celebration, friends reunion,
   family or business dinner. Each one uses Qloo's own "good for" and ambience tags (for example

@@ -2,7 +2,7 @@
 // Routes: the web app, a JSON/NDJSON planning API and an MCP endpoint for AI agents.
 import { ORIGIN, tidy, entity, suggest } from './qloo.js';
 import { plan, bridge, balancedFilms, shares, parseInput, OCCASIONS } from './engine.js';
-import { evening, parseEvening } from './evening.js';
+import { evening, parseEvening, eveningAround, parseAround } from './evening.js';
 import { handleMcp } from './mcp.js';
 import { page } from './page.js';
 import { appRoute } from './app.js';
@@ -118,6 +118,35 @@ async function planRoute(mode, request, env) {
   }
 }
 
+// Another dinner option was chosen: the second stop and the show are searched again around it.
+async function aroundRoute(request, env) {
+  if (request.method !== 'POST') return json({ error: 'Use POST.' }, 405);
+  if (!env.QLOO_API_KEY) return json({ error: 'Live Qloo data is not configured yet.' }, 503);
+  if (Number(request.headers.get('content-length') || 0) > 8000) return json({ error: 'Request is too large.' }, 413);
+  let input;
+  try { input = await request.json(); } catch { return json({ error: 'Invalid JSON.' }, 400); }
+  if (!input || typeof input !== 'object') return json({ error: 'Invalid request.' }, 400);
+  delete input.seen; // only the server knows where someone has been
+  const me = sessionUser(request, env.STORE);
+  if (me) input.seen = env.STORE.seenBy([me.id]);
+  let key;
+  try {
+    const { ids, dinner } = parseAround(input), q = parseEvening(input);
+    const seen = input.seen && Object.keys(input.seen).length ? fnv(JSON.stringify(Object.entries(input.seen).sort())) : '';
+    key = ['around', ...ids, dinner.id, q.start, q.day, q.mood, q.budget, q.special, q.cuisine, seen].join('|');
+  } catch (error) { return json({ error: error.message }, 422); }
+  const hit = cache.get(key);
+  if (hit && hit.expires > Date.now()) return json(hit.value);
+  if (!allow(request)) return json({ error: 'Too many plans from this connection. Try again in a few minutes.' }, 429);
+  try {
+    const result = await eveningAround(input, env.QLOO_API_KEY, qlooOrigin(env));
+    remember(key, result);
+    return json(result);
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : 'Plan failed.' }, 422);
+  }
+}
+
 export default {
   async fetch(request, env = {}) {
     const url = new URL(request.url);
@@ -146,6 +175,7 @@ export default {
     }
     if (url.pathname === '/api/plan') return planRoute('plan', request, env);
     if (url.pathname === '/api/evening') return planRoute('evening', request, env);
+    if (url.pathname === '/api/evening/around') return aroundRoute(request, env);
     if (url.pathname.startsWith('/api/account') || url.pathname.startsWith('/api/rooms') || url.pathname.startsWith('/api/photos/')) {
       return handleSocial(request, env, {
         allow: (req, limit, bucket) => allow(req, limit, bucket),
