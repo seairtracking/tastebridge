@@ -718,3 +718,36 @@ test("family evenings leave out bars by category and by name, but not words that
   assert.equal(familyFriendly("restaurant", "Clubhouse Diner"), true);
   assert.equal(familyFriendly("ice cream shop", "Gelato Lab"), true);
 });
+
+test("a plan for one person works in both modes and every step can be shown in any language", async () => {
+  const { MSG } = await import("../worker/i18n-msg.js");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fakeEveningQloo(10);
+  try {
+    const p = await evening({ favorites: ["Spirited Away"], city: "New York", start: "18:30", day: "friday" }, "k", "https://hackathon.api.qloo.com");
+    assert.equal(p.seeds.length, 1);
+    assert.equal(p.methodKey, "method.solo");
+    assert.equal(p.filmNoteKey.k, "film.solo");
+    assert.ok(p.stops[0].options.length > 0);
+    assert.equal(p.stops[0].options[0].reasonKey, "reason.solo");
+    assert.equal(p.stops[0].options[0].share, null); // no split for one person
+    for (const s of p.steps) {
+      assert.ok(s.t, `step without translation: ${s.label}`);
+      for (const ref of [s.t.l, ...s.t.d]) assert.ok(MSG[ref.k], `unknown message ${ref.k}`);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a quick shortlist for one person has a translation for every step", async () => {
+  const realFetch = globalThis.fetch, fake = fakeQloo();
+  globalThis.fetch = fake.fetch;
+  try {
+    const p = await plan({ favorites: ["Radiohead"], city: "Hanoi" }, "k");
+    assert.equal(p.methodKey, "method.solo");
+    for (const s of p.steps) assert.ok(s.t, `step without translation: ${s.label}`);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

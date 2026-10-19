@@ -112,7 +112,7 @@ export function bridgeN(lists, joint, { seeds = [], take = 4, city = '', fits = 
     if (seen[x.id] === 1) score *= 0.6; // been there: still possible, but somewhere new comes first
     const split = n > 1 ? shareList(x, seeds) || (sum > 0 ? percents(v.map((y) => y / sum)) : null) : null;
     const present = r.filter(Boolean).length;
-    const reasonKey = n !== 2 ? null : present === n ? 'reason.both' : jr ? 'reason.joint' : 'reason.one';
+    const reasonKey = n === 1 ? 'reason.solo' : n !== 2 ? null : present === n ? 'reason.both' : jr ? 'reason.joint' : 'reason.one';
     const reason = n === 1 ? 'A strong match for your taste.'
       : present === n ? (n === 2 ? 'In both people’s individual Qloo lists.' : 'In everyone’s individual Qloo lists.')
       : jr ? `In Qloo’s combined-taste list for the ${n === 2 ? 'pair' : 'group'}.`
@@ -166,7 +166,7 @@ export async function understandAll(favorites, key, origin, step, picks = [], pr
   const n = favorites.length;
   step('resolve', n === 1 ? 'Understanding your taste' : n === 2 ? 'Understanding both tastes' : 'Understanding everyone’s tastes',
     `Looking up ${favorites.map((f) => `“${f}”`).join(n === 2 ? ' and ' : ', ')} in Qloo’s taste graph.`,
-    n === 2 && { l: M('s.resolve.l'), d: [M('s.resolve.d', { a: favorites[0], b: favorites[1] })] });
+    n === 1 ? { l: M('s.resolve.l1'), d: [M('s.resolve.d1', { a: favorites[0] })] } : n === 2 && { l: M('s.resolve.l'), d: [M('s.resolve.d', { a: favorites[0], b: favorites[1] })] });
   // A profile is already a precise set of works, so it is used as it is, with no other readings to fall back on.
   const pools = await Promise.all(favorites.map(async (f, i) => {
     const seed = profiles[i] ? await profileSeed(profiles[i], key, origin).catch(() => null) : null;
@@ -181,7 +181,8 @@ export async function understandAll(favorites, key, origin, step, picks = [], pr
     seeds.push(pick);
   }
   step('resolved', n === 1 ? 'Taste identified' : 'Tastes identified', seeds.map((s) => `${s.name} (${kind(s)})`).join(n === 2 ? ' and ' : ', ') + '.',
-    n === 2 && { l: M('s.resolved.l'), d: [M('s.resolved.d', { a: seeds[0].name, ka: kind(seeds[0]), b: seeds[1].name, kb: kind(seeds[1]) })] });
+    n === 1 ? { l: M('s.resolved.l1'), d: [M('s.resolved.d1', { a: seeds[0].name, ka: kind(seeds[0]) })] }
+      : n === 2 && { l: M('s.resolved.l'), d: [M('s.resolved.d', { a: seeds[0].name, ka: kind(seeds[0]), b: seeds[1].name, kb: kind(seeds[1]) })] });
 
   const probe = () => soft(insights({ 'filter.type': 'urn:entity:movie', 'signal.interests.entities': seeds.map((s) => s.id).join(','), 'feature.explainability': 'true', take: 20 }, key, origin));
   let filmList = await probe(), warning = '', warningKey = null;
@@ -230,9 +231,9 @@ export async function pickFilms(filmList, seeds, key, origin, step) {
   const n = seeds.length, ids = seeds.map((s) => s.id);
   step('films', n === 1 ? 'Finding a film for you' : n === 2 ? 'Finding a film for both' : 'Finding a film for the group',
     n === 1 ? 'Asking Qloo which films fit your taste.' : 'Asking Qloo which films sit between everyone’s tastes, then keeping the most evenly shared ones.',
-    n === 2 && { l: M('s.films.l'), d: [M('s.films.d')] });
+    n === 1 ? { l: M('s.films.l1'), d: [M('s.films.d1')] } : n === 2 && { l: M('s.films.l'), d: [M('s.films.d')] });
   let films = balancedFilms(filmList, ids, new Set(ids));
-  if (n === 1) return { films, filmNote: 'Films that fit your taste, according to Qloo.', filmNoteKey: null };
+  if (n === 1) return { films, filmNote: 'Films that fit your taste, according to Qloo.', filmNoteKey: M('film.solo') };
   let filmNote = `Films closest to an even split between ${n === 2 ? 'both tastes' : 'everyone’s tastes'}, according to Qloo explainability.`;
   let filmNoteKey = n === 2 ? M('film.even') : null;
   const best = films[0]?.shares ? Math.min(...films[0].shares) : 0;
@@ -283,9 +284,9 @@ export async function plan(input, key, origin = ORIGIN, onStep = () => {}) {
   let places = [], strong = -1;
   for (const [i, attempt] of PLACE_ATTEMPTS.entries()) {
     if (i > 0) step('refine', 'Not enough common ground yet', `Found ${strong} of the 3 strong ${occ.plural} in ${city} it wants, so the agent ${attempt.why}.`,
-      n === 2 && { l: M('s.thin.l'), d: [M('s.thin.d', { count: strong, occ: occasion, city, why: M(attempt.whyKey) })] });
+      n <= 2 && { l: M('s.thin.l'), d: [M('s.thin.d', { count: strong, occ: occasion, city, why: M(attempt.whyKey) })] });
     else step('places', `Searching ${occ.plural} in ${city}`, n === 1 ? `Asking Qloo what fits your taste within ${attempt.radius / 1000} km.` : `Asking Qloo what fits each person on their own, and what fits ${who(n)} together, within ${attempt.radius / 1000} km.`,
-      n === 2 && { l: M('s.places.l', { occ: occasion, city }), d: [M('s.places.d', { km: attempt.radius / 1000 })] });
+      n <= 2 && { l: M('s.places.l', { occ: occasion, city }), d: [M(n === 1 ? 's.places.d1' : 's.places.d', { km: attempt.radius / 1000 })] });
     const base = { 'filter.type': 'urn:entity:place', 'filter.location.query': city, 'filter.location.radius': attempt.radius, take: 25 };
     if (attempt.tag) base['filter.tags'] = occ.tag;
     if (attempt.quality) base['bias.quality'] = attempt.quality;
@@ -303,15 +304,15 @@ export async function plan(input, key, origin = ORIGIN, onStep = () => {}) {
     if (strong >= 3) break;
   }
   if (!places.length) throw new Error(`Qloo found no places near ${city} for ${n === 1 ? 'this taste' : 'this group'}. Try another city or occasion.`);
-  step('rank', n === 1 ? 'Ranking for your taste' : 'Ranking for fairness', n === 1 ? 'Scored candidates by how strongly they match your taste.' : 'Scored candidates by how well they serve everyone, using Qloo explainability to show each person’s share.', n === 2 && { l: M('s.rank.l'), d: [M('s.rank.d')] });
+  step('rank', n === 1 ? 'Ranking for your taste' : 'Ranking for fairness', n === 1 ? 'Scored candidates by how strongly they match your taste.' : 'Scored candidates by how well they serve everyone, using Qloo explainability to show each person’s share.', n === 1 ? { l: M('s.rank.l1'), d: [M('s.rank.d1')] } : n === 2 && { l: M('s.rank.l'), d: [M('s.rank.d')] });
 
   const { films, filmNote, filmNoteKey } = await pickFilms(filmList, seeds, key, origin, step);
-  step('done', 'Plan ready', `${places.length} ${occ.plural} and ${films.length} films for ${who(n)}.`, n === 2 && { l: M('s.done.l'), d: [M('s.done.d', { count: places.length, occ: occasion, films: films.length })] });
+  step('done', 'Plan ready', `${places.length} ${occ.plural} and ${films.length} films for ${who(n)}.`, n <= 2 && { l: M('s.done.l'), d: [M(n === 1 ? 's.done.d1' : 's.done.d', { count: places.length, occ: occasion, films: films.length })] });
 
   return {
     source: 'qloo-live', city, occasion, occasionLabel: occ.label, people: n,
     seeds: seedSummary(seeds, names),
-    places, films, filmNote, filmNoteKey, warning, warningKey, steps, methodKey: 'method.plan',
+    places, films, filmNote, filmNoteKey, warning, warningKey, steps, methodKey: n === 1 ? 'method.solo' : 'method.plan',
     method: 'TasteBridge resolves each favorite with Qloo Search, asks Qloo Insights for places that fit each person and the group (filtered by occasion and distance), refines the search when there is too little overlap, and ranks candidates with a fairness-weighted reciprocal-rank rule. Shares come from Qloo explainability. Films are the combined-taste results closest to an even split. These are aggregate cultural affinities, not predictions about a person.',
   };
 }

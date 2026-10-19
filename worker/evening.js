@@ -153,7 +153,7 @@ async function search(stage, attempts, { ids, key, origin, step, accept, seen })
   let best = [], bestCount = -1;
   for (const [n, attempt] of attempts.entries()) {
     if (n > 0) step('refine', `Refining the ${stage}`, `Only ${Math.max(bestCount, 0)} good ${attempt.plural} so far, so the agent ${attempt.why}.`,
-      ids.length === 2 && { l: M('s.refineStage.l', { stage: stageKey(stage) }), d: [M('s.refineStage.d', { count: Math.max(bestCount, 0), why: attempt.whyRef })] });
+      ids.length <= 2 && { l: M('s.refineStage.l', { stage: stageKey(stage) }), d: [M('s.refineStage.d', { count: Math.max(bestCount, 0), why: attempt.whyRef })] });
     const pool = await round(ids, attempt.params, attempt.opts, key, origin, seen);
     const good = pool.filter(accept);
     // Places that are mainly the right kind lead; the rest keep their fairness order behind them.
@@ -203,7 +203,7 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
   const tags = (...t) => { const list = t.filter(Boolean); return list.length > 1 ? { 'filter.tags': list.join(','), 'operator.filter.tags': 'intersection' } : { 'filter.tags': list[0] }; };
   const label = [q.cuisine && q.cuisine[0].toUpperCase() + q.cuisine.slice(1), 'restaurants'].filter(Boolean).join(' ');
   step('dinner', `Finding ${sp ? sp.label.toLowerCase() + ' ' : ''}dinner ${q.near ? 'near you' : 'in ' + q.city}`, `Asking Qloo for ${label.toLowerCase()}${q.mood ? ` with a ${q.mood} feel` : ''}${sp ? `, preferring places Qloo marks as good for ${sp.label.toLowerCase()}s` : ''} that fit ${n === 1 ? 'your taste' : `each of you and ${who(n)} together`}.`,
-    n === 2 && { l: M(sp ? 's.dinner.lSp' : 's.dinner.l', { special: q.special, where: q.near ? M('where.near') : M('where.in', { city: q.city }) }), d: [M('s.dinner.d', { what: q.cuisine ? M('what.cuisine', { cuisine: q.cuisine }) : M('what.any') }), ...(q.mood ? [M('s.dinner.mood', { mood: q.mood })] : []), ...(sp ? [M('s.dinner.special', { special: q.special })] : [])] });
+    n <= 2 && { l: M(sp ? 's.dinner.lSp' : 's.dinner.l', { special: q.special, where: q.near ? M('where.near') : M('where.in', { city: q.city }) }), d: [M(n === 1 ? 's.dinner.d1' : 's.dinner.d', { what: q.cuisine ? M('what.cuisine', { cuisine: q.cuisine }) : M('what.any') }), ...(q.mood ? [M('s.dinner.mood', { mood: q.mood })] : []), ...(sp ? [M('s.dinner.special', { special: q.special })] : [])] });
   const base = { 'filter.type': 'urn:entity:place', take: 25 };
   const dinnerAttempts = [
     { params: { ...base, ...where(q.near, q.city, r0), ...tags(restaurant, cuisineTag, moodTag), ...(sp?.quality ? { 'bias.quality': sp.quality } : {}) }, opts: dinnerOpts, enough: 3 },
@@ -290,7 +290,7 @@ export async function evening(input, key, origin = ORIGIN, onStep = () => {}) {
     special: q.special, specialLabel: sp?.label || null, tip: sp?.tip || null,
     weather: weather && weather.some(Boolean) ? weather : null,
     occasionLabel: 'Tonight', people: n, seeds: seedSummary(seeds, q.names),
-    stops, films, filmNote, filmNoteKey, warning, warningKey, steps, methodKey: 'method.evening',
+    stops, films, filmNote, filmNoteKey, warning, warningKey, steps, methodKey: n === 1 ? 'method.solo' : 'method.evening',
     method: 'TasteBridge resolves each favorite with Qloo Search and checks their signal, then plans the evening stop by stop with Qloo Insights: dinner filtered by cuisine and mood, a second stop and a live music or show venue searched around the dinner spot. Every stop is ranked with the fairness-weighted rule and Qloo explainability, adjusted for mood, cuisine, budget, walking distance and opening hours where Qloo has them. Qloo does not list events, so check each venue for tonight’s programme.',
   };
 }

@@ -12,6 +12,8 @@ Two ways to use it:
 
 - **Tonight's plan:** a timeline for the evening. Pick a start time, what to eat, a mood (romantic,
   cozy, lively, quiet, chill) and a budget, and type a city or tap **Use my location**.
+- **Just me:** tap 👤 on the friend's field to plan for one taste (or one taste profile). Every agent step,
+  reason and note has its own one-person wording in all ten languages.
 - **Quick shortlist:** four fair places for one occasion (dinner, drinks, coffee, culture or a night out).
 - **Special occasions:** birthday, anniversary, first date, date night, celebration, friends reunion,
   family or business dinner. Each one uses Qloo's own "good for" and ambience tags (for example
